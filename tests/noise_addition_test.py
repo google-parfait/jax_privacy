@@ -25,7 +25,6 @@ import numpy as np
 import optax
 import scipy.stats
 
-
 _ITERATIONS = 3
 _STDDEV = 1.0
 _SEED = 1234
@@ -301,6 +300,68 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     update, state1 = noisy_optimizer.update(params, state0, params)
     chex.assert_trees_all_equal_shapes_and_dtypes(state0, state1)
     chex.assert_trees_all_equal_shapes_and_dtypes(update, params)
+
+  @parameterized.parameters(*_PRIVATIZER_FNS)
+  def test_init_for_step(self, privatizer_fn):
+    privatizer = privatizer_fn()
+    params = {'a': jnp.zeros(4), 'b': jnp.zeros((2, 3))}
+    expected_state = privatizer.init(params)
+    for step in range(_ITERATIONS):
+      actual_state = noise_addition.init_for_step(privatizer, params, step=step)
+      actual_noise, _ = privatizer.update(params, actual_state)
+      expected_noise, expected_state = privatizer.update(params, expected_state)
+      chex.assert_trees_all_close(actual_noise, expected_noise)
+
+  @parameterized.parameters(
+      gaussian_privatizer_fn,
+      dense_matrix_factorization_privatizer_fn,
+  )
+  def test_init_for_step_eliminates_dead_noise_generation(self, privatizer_fn):
+    # A 4 TB ShapeDtypeStruct would OOM if XLA allocated zeros or noise buffers.
+    huge_params = jax.ShapeDtypeStruct(shape=(10**12,), dtype=jnp.float32)
+    privatizer = privatizer_fn()
+    state = noise_addition.init_for_step(privatizer, huge_params, step=2)
+    expected_state = noise_addition.init_for_step(
+        privatizer, jnp.zeros(1, dtype=jnp.float32), step=2
+    )
+    chex.assert_trees_all_equal(state, expected_state)
+
+  def test_init_for_step_reuses_compilation_across_steps(self):
+    privatizer = streaming_matrix_factorization_privatizer_fn()
+    params = {'a': jnp.zeros(4), 'b': jnp.zeros((2, 3))}
+    noise_addition._init_for_step.clear_cache()
+
+    for step in (0, 1, 2, jnp.int32(3)):
+      _ = noise_addition.init_for_step(privatizer, params, step=step)
+
+    self.assertEqual(noise_addition._init_for_step._cache_size(), 1)
+
+  def test_init_for_step_bounds_peak_memory(self):
+    noising_matrix = toeplitz.inverse_as_streaming_matrix(
+        jnp.ones(17) / jnp.sqrt(17.0), column_normalize_for_n=32
+    )
+    privatizer = noise_addition.matrix_factorization_privatizer(
+        noising_matrix=noising_matrix, prng_key=jax.random.key(0), stddev=1.0
+    )
+    params = {f'w{i}': jnp.zeros((64, 64), dtype=jnp.float32) for i in range(8)}
+    expected_state = privatizer.init(params)
+    state_bytes = sum(x.nbytes for x in jax.tree.leaves(expected_state))
+
+    compiled = noise_addition._init_for_step.lower(
+        privatizer, params, jnp.int32(3)
+    ).compile()
+    mem = compiled.memory_analysis()
+    self.assertIsNotNone(mem)
+    peak_bytes = mem.output_size_in_bytes + mem.temp_size_in_bytes
+    self.assertLess(peak_bytes, int(1.25 * state_bytes))
+
+    for _ in range(3):
+      _, expected_state = privatizer.update(params, expected_state)
+    actual_state = noise_addition.init_for_step(privatizer, params, step=3)
+    chex.assert_trees_all_close(
+        privatizer.update(params, actual_state)[0],
+        privatizer.update(params, expected_state)[0],
+    )
 
 
 if __name__ == '__main__':

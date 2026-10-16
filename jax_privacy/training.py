@@ -25,10 +25,15 @@ mechanism variants and performance knobs. Since it is defined in terms of an
 ExecutionPlanConfig object, it automatically works with any mechanism plan
 supported by our Tier 2 API.
 
-Because it is designed to be framework and model-agnostic, there are a few
-things that are explicitly out of scope, like checkpointing and metrics logging.
-Callers are expected to implement these things themselves via dependency
-injection through the callback_fn option.
+Because it is designed to be lightweight and framework-agnostic, ``jax_privacy``
+does not take dependencies on checkpointing libraries (such as Orbax) or metrics
+logging backends, and leaves those concerns out of scope for this module.
+Instead, :class:`~jax_privacy.training.DPTrainer` is designed to compose
+naturally with external infrastructure: callers can inject custom checkpointing
+and logging logic via the ``callback`` argument to
+:meth:`~jax_privacy.training.DPTrainer.fit`, and resume from a saved checkpoint
+by passing the restored :class:`~jax_privacy.training.TrainingState` directly to
+:meth:`~jax_privacy.training.DPTrainer.fit`.
 
 Example Usage:
 
@@ -131,7 +136,7 @@ class TrainingState:
   step: int
   params: Params
   opt_state: OptState
-  noise_state: NoiseState
+  noise_state: NoiseState | None = None
 
 
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
@@ -182,8 +187,10 @@ class DPTrainer:
       fixed element shapes.
     noise_seed: Optional seed for the random number generator used for noise
       addition. If ``None``, a fresh random seed is drawn; pass an explicit seed
-      for multi-host coordination or reproducible tests (and keep it secret in
-      production deployments).
+      for multi-host coordination, stateless checkpoint replay
+      (``allow_missing_noise_state=True``), or reproducible tests (and keep it
+      secret in production deployments).
+    allow_missing_noise_state: Whether to allow ``noise_state=None`` on resume.
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -200,8 +207,12 @@ class DPTrainer:
   )
   padding_example: Any = None
   noise_seed: int | None = None
+  allow_missing_noise_state: bool = False
 
   def __post_init__(self):
+    # noise_addition_transform closes over noise_seed (or a random key if None).
+    if self.allow_missing_noise_state and self.noise_seed is None:
+      raise ValueError("allow_missing_noise_state=True requires noise_seed.")
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
 
   @functools.cached_property
@@ -287,6 +298,11 @@ class DPTrainer:
       rng_or_seed: np.random.Generator | int | None = None,
   ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
     """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
+    if self.allow_missing_noise_state and state.noise_state is None:
+      init_fn = jax.jit(self.plan.noise_addition_transform.init)
+      grads_like = optax.tree.cast(state.params, self.performance_flags.dtype)
+      noise_state = init_fn.eval_shape(grads_like)
+      state = dataclasses.replace(state, noise_state=noise_state)
     return _compilation.precompile(
         self, dataset, state, rng_or_seed=rng_or_seed
     )
@@ -310,9 +326,12 @@ class DPTrainer:
       state: Initial or resumable ``TrainingState`` (e.g., from :meth:`init`).
         Training starts or continues from ``state.step``, and the batch
         selection iterator safely fast-forwards to maintain deterministic DP
-        properties. Note that ``state`` buffers are donated during training
-        (:meth:`train_step` uses ``donate_argnames=["state"]``), so copy any
-        arrays you need to retain after ``fit`` returns.
+        properties. If ``state.noise_state`` is ``None``, it is reconstructed by
+        replaying the noise addition transform from step 0 (requires
+        ``self.allow_missing_noise_state=True``). Note that ``state`` buffers
+        are donated during training (:meth:`train_step` uses
+        ``donate_argnames=["state"]``), so copy any arrays you need to retain
+        after ``fit`` returns.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
@@ -339,6 +358,14 @@ class DPTrainer:
     # than ``self``.
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
+
+    if self.allow_missing_noise_state and state.noise_state is None:
+      transform = self.plan.noise_addition_transform
+      grads_like = optax.tree.cast(state.params, self.performance_flags.dtype)
+      noise_state = jax_privacy.noise_addition.init_for_step(
+          transform, grads_like, int(state.step)
+      )
+      state = dataclasses.replace(state, noise_state=noise_state)
 
     if (
         precompile

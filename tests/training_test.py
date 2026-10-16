@@ -344,6 +344,76 @@ class DPTrainerTest(parameterized.TestCase):
       )
       self.assertEqual(final_state_resumed.step, expected_final_state.step)
 
+  @parameterized.named_parameters(*_DATASET_TYPES)
+  def test_resume_without_noise_state_replays_identically(self, to_dataset):
+    """Resuming with noise_state=None replays the privatizer state exactly."""
+    params = {'w': jnp.array([5.0, 5.0], dtype=jnp.bfloat16), 'b': jnp.zeros(1)}
+    dataset = to_dataset(
+        np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
+    )
+    config = execution_plan.BandMFConfig.default(
+        num_bands=3,
+        iterations=5,
+        noise_multiplier=0.5,
+        expected_participations=1,
+    )
+
+    def loss_fn(p, x, rng):
+      del rng
+      pred = p['w'].astype(jnp.float32) - x + p['b']
+      loss = jnp.mean(pred**2)
+      return loss, {'loss': loss}
+
+    def make_trainer():
+      return training.DPTrainer(
+          config=config,
+          loss_fn=loss_fn,
+          optimizer=optax.sgd(0.01),
+          noise_seed=7,
+          allow_missing_noise_state=True,
+      )
+
+    intermediate_states = []
+
+    def callback(step, state, _):
+      del step
+      intermediate_states.append(jax.tree.map(jax.numpy.copy, state))
+
+    trainer = make_trainer()
+    expected = trainer.fit(
+        dataset, trainer.init(params), rng_or_seed=42, callback=callback
+    )
+
+    for state in intermediate_states[:-1]:
+      ckpt_state = dataclasses.replace(state, noise_state=None)
+      resumed = make_trainer().fit(dataset, ckpt_state, rng_or_seed=42)
+      jax.tree.map(np.testing.assert_allclose, resumed.params, expected.params)
+      self.assertEqual(int(resumed.step), int(expected.step))
+
+  def test_resume_without_noise_state_requires_noise_seed(self):
+    """allow_missing_noise_state=True requires noise_seed at init time."""
+    with self.assertRaisesRegex(ValueError, 'noise_seed'):
+      training.DPTrainer(
+          config=_make_config(3),
+          loss_fn=_quadratic_loss,
+          optimizer=optax.sgd(0.01),
+          allow_missing_noise_state=True,
+      )
+
+    params = jnp.array([5.0, 5.0])
+    dataset = np.array([[1.0, 2.0], [3.0, 4.0]])
+    trainer = training.DPTrainer(
+        config=_make_config(3),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(0.01),
+    )
+    init_state = trainer.init(params)
+    ckpt_state = training.TrainingState(
+        step=1, params=init_state.params, opt_state=init_state.opt_state
+    )
+    with self.assertRaises(TypeError):
+      trainer.fit(dataset, ckpt_state, rng_or_seed=0)
+
   def test_map_dataset_pytree_structure(self):
     """Train loop works with a Grain MapDataset yielding PyTrees."""
     params = jnp.array([1.0, 2.0])
