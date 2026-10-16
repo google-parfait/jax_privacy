@@ -25,10 +25,15 @@ mechanism variants and performance knobs. Since it is defined in terms of an
 ExecutionPlanConfig object, it automatically works with any mechanism plan
 supported by our Tier 2 API.
 
-Because it is designed to be framework and model-agnostic, there are a few
-things that are explicitly out of scope, like checkpointing and metrics logging.
-Callers are expected to implement these things themselves via dependency
-injection through the callback_fn option.
+Because it is designed to be lightweight and framework-agnostic, ``jax_privacy``
+does not take dependencies on checkpointing libraries (such as Orbax) or metrics
+logging backends, and leaves those concerns out of scope for this module.
+Instead, :class:`~jax_privacy.training.DPTrainer` is designed to compose
+naturally with external infrastructure: callers can inject custom checkpointing
+and logging logic via the ``callback`` argument to
+:meth:`~jax_privacy.training.DPTrainer.fit`, and resume from a saved checkpoint
+by passing the restored :class:`~jax_privacy.training.TrainingState` directly to
+:meth:`~jax_privacy.training.DPTrainer.fit`.
 
 Example Usage:
 
@@ -123,6 +128,15 @@ class LossFn(Protocol):
     ...
 
 
+@jax.jit(static_argnames=["transform", "dtype"])
+def _replay_noise_state(transform, params, dtype, step):
+  """Replays a noise-addition transform from step 0 to ``step``."""
+  grads_like = optax.tree.cast(params, dtype)
+  zeros = optax.tree.zeros_like(grads_like)
+  body = lambda _, s: transform.update(zeros, s)[1]
+  return jax.lax.fori_loop(0, step, body, transform.init(grads_like))
+
+
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class TrainingState:
@@ -131,7 +145,26 @@ class TrainingState:
   step: int
   params: Params
   opt_state: OptState
-  noise_state: NoiseState
+  noise_state: NoiseState | None = None
+
+  def compress(self) -> "TrainingState":
+    """Returns a copy with ``noise_state`` set to ``None`` for checkpointing."""
+    return dataclasses.replace(self, noise_state=None)
+
+  def restore(self, trainer: "DPTrainer") -> "TrainingState":
+    """Restores omitted ``noise_state`` (requires ``trainer.noise_seed``)."""
+    # Replays trainer's noise-addition transform from step 0 to self.step when
+    # noise_state was omitted; states already populated are returned unchanged.
+    if self.noise_state is not None:
+      return self
+    if trainer.noise_seed is None:
+      raise ValueError("TrainingState.restore requires DPTrainer.noise_seed.")
+    dtype = jax.numpy.dtype(trainer.performance_flags.dtype)
+    step = jax.numpy.asarray(self.step, jax.numpy.int32)
+    noise_state = _replay_noise_state(
+        trainer.plan.noise_addition_transform, self.params, dtype, step
+    )
+    return dataclasses.replace(self, noise_state=noise_state)
 
 
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
@@ -249,6 +282,8 @@ class DPTrainer:
       A tuple ``(new_state, aux)`` where ``new_state`` is the updated
       ``TrainingState`` and ``aux`` is the per-example auxiliary output.
     """
+    if state.noise_state is None:
+      raise ValueError("Compressed state; call state.restore(trainer) first.")
     optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
     pre_clip_fn = optimizer.pre_clipping_transform(state.opt_state)
     grad_fn = self.plan.clipped_grad(
