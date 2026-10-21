@@ -76,6 +76,11 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     always `1.0` / `l2_clip_norm` with guidance to use `.sensitivity()` /
     `.l2_norm_bound`, matching `clipped_grad`. The old text ignored
     `normalize_by` and per-layer clipping. Added contract tests.
+-   **[`scale_then_privatize`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.optimizers.html)**:
+    Fixed Inf/NaN in the pre-clipping transform when the second-moment
+    estimate is zero (Adam/RMSProp init, or float16 where default `eps=1e-8`
+    underflows). Scaling is now computed in at least float32 with a floored
+    denominator, so zero-gradient coordinates stay zero.
 
 ### Internal / Cleanups
 
