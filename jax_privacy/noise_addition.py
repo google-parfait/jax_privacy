@@ -195,6 +195,54 @@ gaussian_privatizer.__doc__ = (
 )
 
 
+_MAX_REPLAY_CHUNKS = 8
+
+
+@jax.jit(static_argnames=['transform'])
+def _init_for_step(transform, structure, step):
+  """Initializes ``transform`` and advances its state to ``step``."""
+  zeros = optax.tree.zeros_like(structure)
+  body = lambda _, s: transform.update(zeros, s)[1]
+  leaves, treedef = jax.tree.flatten(transform.init(structure))
+  # Partition state leaves into byte-balanced chunks so XLA's while-loop DCE
+  # prunes inactive leaves and bounds temporary roll scratch.
+  num_chunks = max(1, min(_MAX_REPLAY_CHUNKS, len(leaves)))
+  chunk_bytes = [0] * num_chunks
+  leaf_chunk = []
+  for leaf in leaves:
+    c = min(range(num_chunks), key=chunk_bytes.__getitem__)
+    leaf_chunk.append(c)
+    chunk_bytes[c] += leaf.size * leaf.dtype.itemsize
+
+  out_leaves = list(leaves)
+  for c in range(num_chunks):
+    state = jax.lax.fori_loop(
+        jnp.zeros_like(step), step, body, transform.init(structure)
+    )
+    for i, leaf in enumerate(jax.tree.leaves(state)):
+      if leaf_chunk[i] == c:
+        out_leaves[i] = leaf
+  return treedef.unflatten(out_leaves)
+
+
+def init_for_step(
+    transform: optax.GradientTransformation,
+    structure: optax.ArrayTree,
+    step: jax.typing.ArrayLike = 0,
+) -> optax.OptState:
+  """Initializes ``transform`` and advances its state to ``step``.
+
+  Args:
+    transform: A stateful noise-addition :class:`optax.GradientTransformation`.
+    structure: Example gradient PyTree passed to ``transform.init``.
+    step: Non-negative step index to fast-forward the state to.
+
+  Returns:
+    The state of ``transform`` after ``step`` updates.
+  """
+  return _init_for_step(transform, structure, jnp.asarray(step, jnp.int32))
+
+
 def _compute_loop_bounds(matrix_row):
   """Computes bounds for jax.lax.fori_loop version of row-column reduction."""
   assert matrix_row.ndim == 1
