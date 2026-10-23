@@ -1174,7 +1174,9 @@ def geometric_sum(
 
   Args:
     a: Scale factor (or vector of scale factors).
-    r: ratio between successive terms, requires :math:`|r| < 1`.
+    r: ratio between successive terms. Any value is supported for finite
+      ``num``; the limit ``num=jnp.inf`` requires :math:`|r| < 1` for the series
+      to converge.
     num: How many terms to add, or jnp.inf for the limit.
 
   Returns:
@@ -1196,7 +1198,11 @@ def geometric_sum(
     INTERCEPT = 3.33503185
     pow_threshold = INTERCEPT + SLOPE * jnp.log(n)
 
-    use_direct_calc = r < 1 - 10 ** (-pow_threshold)
+    # The series approximation is only valid in a neighborhood of r = 1, so the
+    # test must be two-sided: the direct calculation is exact for every r != 1,
+    # including r > 1 (which arises for example as a product theta_j * theta_k
+    # of buf_decay parameters of magnitude greater than one).
+    use_direct_calc = jnp.abs(r - 1) > 10 ** (-pow_threshold)
 
     # Quadratic Taylor polynomial approx at r = 1 from sympy:
     x0 = n - 1
