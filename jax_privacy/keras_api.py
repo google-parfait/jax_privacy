@@ -707,8 +707,12 @@ def _create_fit_fn_with_validation(
         train_size=validated_train_size,
     )
 
+    # `_optimizer_steps` counts train_step calls, i.e. micro-batches. Keras
+    # applies an optimizer update every `gradient_accumulation_steps` of them,
+    # and `DPKerasConfig.train_steps` counts optimizer updates.
     performed_optimizer_steps = (
         _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
+        // self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
     )
     optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
         self._dp_params.train_size,  # pylint: disable=protected-access

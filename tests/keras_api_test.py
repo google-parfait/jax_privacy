@@ -612,6 +612,44 @@ class KerasApiTest(parameterized.TestCase):
     )
     self.assertEqual(steps_explicit, 3 * 2)
 
+  def test_repeated_fit_with_gradient_accumulation_counts_optimizer_updates(
+      self,
+  ):
+    train_size = 40
+    batch_size = 4
+    gas = 2
+    # Two epochs of 40 // 8 = 5 optimizer updates each.
+    train_steps = 2 * (train_size // (batch_size * gas))
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=train_steps,
+        train_size=train_size,
+        noise_multiplier=1.0,
+        seed=123,
+    )
+    model = keras_api.make_private(model, dp_params)
+    optimizer = keras.optimizers.SGD(
+        learning_rate=0.01, gradient_accumulation_steps=gas
+    )
+    model.compile(loss="mse", optimizer=optimizer)
+
+    # Each fit() runs 10 micro-batches, i.e. 5 optimizer updates, so the
+    # budget of 10 updates allows exactly two one-epoch fits.
+    model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+    model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
+      model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+
   def test_fit_with_poisson_sampling_and_gradient_accumulation(self):
     train_size = 40
     batch_size = 4
