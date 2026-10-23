@@ -18,6 +18,15 @@
 
 .. automodule:: {{ fullname }}
 
+{% if fullname == 'jax_privacy.matrix_factorization' %}
+
+.. seealso::
+
+   :doc:`/matrix_factorization` for notation, participation schemas, and
+   parameterized matrix classes used by this public API.
+
+{% endif %}
+
 {% block modules %}
 {% if modules %}
 .. rubric:: Modules

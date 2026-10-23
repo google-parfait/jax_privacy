@@ -62,6 +62,12 @@ The format is based on https://keepachangelog.com/en/1.1.0/
         establishing ReadTheDocs rendering quality as a primary priority for
         Python docstrings and Markdown documentation, complete with local
         preview workflows.
+    -   **Matrix factorization notation page**: Moved the notation and
+        participation-schema tables from
+        `jax_privacy/matrix_factorization/README.md` to a
+        [Matrix Factorization notation](https://jax-privacy.readthedocs.io/en/latest/matrix_factorization.html)
+        page, and linked that page from the generated Public API docs.
+        ([#198](https://github.com/google-parfait/jax_privacy/issues/198))
     -   **Sphinx intersphinx mappings**: Added cross-reference mappings for
         `jax` and `optax` for native cross-references in Sphinx documentation.
 
