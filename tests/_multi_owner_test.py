@@ -500,6 +500,131 @@ class MultiOwnerMinSepSamplingTest(parameterized.TestCase):
     self.assertEqual(strategy.example_maxpart, 1)
     _check_slot_level_min_sep(batches, data, 2)
 
+  @parameterized.parameters(
+      # (batch_size, iterations, min_sep); 12 examples, so every case asks for
+      # more slots than there are examples.
+      (2, 10, 1),
+      (2, 10, 2),
+      (3, 8, 2),
+      (4, 4, 2),
+  )
+  def test_more_slots_than_examples(self, batch_size, iterations, min_sep):
+    """Examples are reused when the schedule is longer than the dataset."""
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(12)])
+    total_slots = batch_size * iterations
+    self.assertGreater(total_slots, data.num_examples)
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=batch_size,
+        iterations=iterations,
+        min_sep=min_sep,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, iterations)
+    self.assertEqual(sum(len(batch) for batch in batches), total_slots)
+    self.assertGreater(strategy.example_maxpart, 1)
+    _check_slot_level_min_sep(batches, data, min_sep)
+    # Ganesh et al. (2025) bound the post-hoc contribution bound of their
+    # Algorithm 4 by ceil(T / b).
+    self.assertLessEqual(strategy.user_maxpart, math.ceil(iterations / min_sep))
+
+  def test_more_slots_than_examples_multi_owner(self):
+    """Example reuse also works when examples have several owners."""
+    data = MultiOwnerGraph.from_owners_per_example(
+        [[2 * i, 2 * i + 1] for i in range(10)]
+    )
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=4,
+        iterations=9,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    self.assertLen(batches, 9)
+    self.assertEqual(sum(len(batch) for batch in batches), 36)
+    _check_slot_level_min_sep(batches, data, 2)
+
+  def test_no_example_repeated_within_a_batch(self):
+    """min_sep >= 1 forbids the same example twice in one batch."""
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(12)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=3,
+        iterations=10,
+        min_sep=1,
+    )
+    for batch in strategy.batch_iterator(data.num_examples):
+      self.assertLen(set(batch.tolist()), len(batch))
+
+  # 255 and 256 straddle the uint8 / uint16 boundary of the reuse counter.
+  @parameterized.parameters(255, 256, 1000)
+  def test_heavy_reuse_does_not_overflow_counters(self, iterations):
+    """Reuse counts are not limited by the dtype used for example indices."""
+    # Three examples fit in an int8 index, but each one is used in every batch.
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(3)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=3,
+        iterations=iterations,
+        min_sep=1,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    _, counts = np.unique(np.concatenate(batches), return_counts=True)
+    self.assertEqual(int(counts.max()), iterations)
+    self.assertEqual(strategy.example_maxpart, iterations)
+    _check_slot_level_min_sep(batches, data, 1)
+
+  def test_examples_without_users_are_used_once(self):
+    """Min-sep cannot space out an example with no users, so it isn't reused."""
+    # Examples 1 and 4 have no users (example_ids has gaps).
+    data = MultiOwnerGraph(
+        example_ids=np.array([0, 2, 3, 5, 6, 7]),
+        user_ids=np.array([0, 1, 2, 3, 4, 5]),
+    )
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=4,
+        iterations=8,
+        min_sep=1,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    for batch in batches:
+      self.assertLen(set(batch.tolist()), len(batch))
+    all_selected = np.concatenate(batches)
+    self.assertLessEqual(int(np.sum(all_selected == 1)), 1)
+    self.assertLessEqual(int(np.sum(all_selected == 4)), 1)
+    _check_slot_level_min_sep(batches, data, 1)
+
+    # Here the three users can fill at most 13 of 30 slots, so the strategy
+    # must fail rather than pad batches by repeating the example without users.
+    data = MultiOwnerGraph(
+        example_ids=np.array([0, 2, 3]), user_ids=np.array([0, 1, 2])
+    )
+    with self.assertRaisesRegex(ValueError, 'Could not fill'):
+      MultiOwnerMinSepSampling(
+          attribution=data,
+          batch_size=3,
+          iterations=10,
+          min_sep=3,
+      )
+
+  def test_example_maxpart_matches_actual_with_reuse(self):
+    """example_maxpart is exact when examples are used more than once."""
+    data = MultiOwnerGraph.from_owners_per_example([[i] for i in range(20)])
+    strategy = MultiOwnerMinSepSampling(
+        attribution=data,
+        batch_size=4,
+        iterations=15,
+        min_sep=2,
+    )
+    batches = list(strategy.batch_iterator(data.num_examples))
+    _, counts = np.unique(np.concatenate(batches), return_counts=True)
+    self.assertGreater(int(counts.max()), 1)
+    self.assertEqual(strategy.example_maxpart, int(counts.max()))
+    user_counts = _get_user_participation_counts(batches, data)
+    self.assertEqual(strategy.user_maxpart, max(user_counts.values()))
+    _check_slot_level_min_sep(batches, data, 2)
+
   def test_infeasible_raises(self):
     """ValueError when the greedy algorithm cannot fill all slots."""
     # 2 examples owned by the same user: with min_sep=2 and batch_size=1,
