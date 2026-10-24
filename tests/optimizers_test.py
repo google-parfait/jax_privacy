@@ -169,6 +169,99 @@ class ScaleThenPrivatizeTest(parameterized.TestCase):
     # With eps_root > 0, the scaling should be smaller (more regularized).
     self.assertGreater(float(scaled_no[0]), float(scaled_with[0]))
 
+  @parameterized.named_parameters(
+      ('float32', jnp.float32),
+      ('float16', jnp.float16),
+  )
+  def test_zero_second_moment_keeps_zero_grad_finite(self, dtype):
+    """v=0 must not map a zero gradient to NaN via 0 * inf."""
+    base_opt = optax.adam(1e-3)
+    zero_nu = jnp.zeros(2, dtype=dtype)
+    augmented = optimizers.scale_then_privatize(
+        base_opt,
+        extract_preconditioner_from_state_fn=lambda state: zero_nu,
+    )
+    params = jnp.zeros(2, dtype=dtype)
+    state = augmented.init(params)
+    pct = augmented.pre_clipping_transform(state)
+    scaled = pct(jnp.zeros(2, dtype=dtype))
+    self.assertTrue(jnp.all(jnp.isfinite(scaled)))
+    chex.assert_trees_all_close(scaled, jnp.zeros(2, dtype=dtype))
+
+  def test_adam_init_zero_grad_is_finite(self):
+    """Adam's initial nu is 0; a zero gradient must stay finite in float16."""
+    base_opt = optax.adam(1e-3)
+    augmented = optimizers.scale_then_privatize(base_opt)
+    params = jnp.array([1.0, 2.0], dtype=jnp.float16)
+    state = augmented.init(params)
+    pct = augmented.pre_clipping_transform(state)
+    scaled = pct(jnp.zeros_like(params))
+    self.assertTrue(jnp.all(jnp.isfinite(scaled)))
+    chex.assert_trees_all_close(scaled, jnp.zeros_like(params))
+
+  def test_zero_second_moment_default_eps_is_1_over_eps(self):
+    """With v=0, s_t should be 1/eps rather than inf."""
+    base_opt = optax.adam(1e-3)
+    zero_nu = jnp.zeros(1)
+    augmented = optimizers.scale_then_privatize(
+        base_opt,
+        eps=1e-8,
+        extract_preconditioner_from_state_fn=lambda s: zero_nu,
+    )
+    params = jnp.zeros(1)
+    state = augmented.init(params)
+    pct = augmented.pre_clipping_transform(state)
+    scaled = pct(jnp.ones(1))
+    chex.assert_trees_all_close(scaled, jnp.array([1e8]), atol=1.0)
+
+  def test_zero_second_moment_eps_zero_is_finite(self):
+    """v=0 and eps=0 must still produce a finite scale, not inf/NaN."""
+    base_opt = optax.adam(1e-3)
+    zero_nu = jnp.zeros(1)
+    augmented = optimizers.scale_then_privatize(
+        base_opt,
+        eps=0.0,
+        extract_preconditioner_from_state_fn=lambda s: zero_nu,
+    )
+    params = jnp.zeros(1)
+    state = augmented.init(params)
+    pct = augmented.pre_clipping_transform(state)
+    scaled = pct(jnp.ones(1))
+    self.assertTrue(jnp.isfinite(scaled[0]))
+    self.assertGreater(float(scaled[0]), 0.0)
+
+  def test_inverse_recovers_gradient_when_nu_is_zero(self):
+    """Forward then inverse scaling should be the identity at v=0."""
+    base_opt = optax.adam(1e-3)
+    zero_nu = jnp.zeros(3)
+    augmented = optimizers.scale_then_privatize(
+        base_opt,
+        extract_preconditioner_from_state_fn=lambda s: zero_nu,
+    )
+    params = jnp.zeros(3)
+    state = augmented.init(params)
+    grad = jnp.array([0.1, -0.2, 0.3])
+    scaled = augmented.pre_clipping_transform(state)(grad)
+    recovered = augmented.pre_clipping_transform(state, inverse=True)(scaled)
+    chex.assert_trees_all_close(recovered, grad, atol=1e-5)
+
+  def test_positive_nu_matches_closed_form(self):
+    """Well-conditioned v should still match 1 / (sqrt(v) + eps)."""
+    base_opt = optax.adam(1e-3)
+    nu = jnp.array([4.0, 9.0, 16.0])
+    eps = 1e-8
+    augmented = optimizers.scale_then_privatize(
+        base_opt,
+        eps=eps,
+        extract_preconditioner_from_state_fn=lambda s: nu,
+    )
+    params = jnp.zeros(3)
+    state = augmented.init(params)
+    g = jnp.ones(3)
+    scaled = augmented.pre_clipping_transform(state)(g)
+    expected = g / (jnp.sqrt(nu) + eps)
+    chex.assert_trees_all_close(scaled, expected, atol=1e-6)
+
   def test_jit_compatible(self):
     """The full pipeline should work under jax.jit."""
     base_opt = optax.adamw(1e-3)
