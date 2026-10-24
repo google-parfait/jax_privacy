@@ -70,7 +70,7 @@ class _NoiseStructureFn(Protocol):
 
 
 class _NoiseAdder(Protocol):
-  """Protocol specifying the semantics of _IntermediateStrategy.add.
+  """Protocol specifying the semantics of _IntermediateShardingStrategy.add.
 
   Will be called as add(value, noise), where the first argument represents the
   input and can have arbitrary shape/sharding while the second arguments
@@ -87,13 +87,14 @@ class _NoiseAdder(Protocol):
     """Add the noise to the input tensor, possibly via a reshape operation."""
 
 
-class _IntermediateStrategy(NamedTuple):
+class _IntermediateShardingStrategy(NamedTuple):
   """Specifies an implementation strategy for adding noise to values.
 
   Noise may be generated with a different shape and/or sharding than the
   inputs. This class holds implementations to determine the shape/sharding
   of the intermediates, and a function to add two arrays with potentially
-  different shapes/shardings.
+  different shapes/shardings. For example usage, see
+  ``_dense_matrix_factorization_privatizer`` below.
   """
 
   get_noise_structure: _NoiseStructureFn
@@ -103,15 +104,15 @@ class _IntermediateStrategy(NamedTuple):
 # Our public API expects an Enum to prevent users from passing in a custom
 # implementation that breaks the formal guarantees. Custom implementations
 # can be used, but should be checked in and reviewed by JAX Privacy authors.
-class SupportedStrategies(enum.Enum):
-  """Supported strategies for generating intermediate noise."""
+class ShardingStrategies(enum.Enum):
+  """Sharding strategies for generating intermediate noise."""
 
-  DEFAULT = _IntermediateStrategy(
+  DEFAULT = _IntermediateShardingStrategy(
       get_noise_structure=lambda value_info: value_info,
       add=lambda value, noise: (value + noise).astype(value.dtype),
   )
   """Basic approach for single-machine training scenarios."""
-  ZERO = _IntermediateStrategy(
+  ZERO = _IntermediateShardingStrategy(
       get_noise_structure=sharding_utils.flatten_with_zero_redundancy,
       add=sharding_utils.local_reshape_add,
   )
@@ -121,13 +122,17 @@ class SupportedStrategies(enum.Enum):
   meshes)."""
 
 
+# Deprecated alias for ShardingStrategies.
+SupportedStrategies = ShardingStrategies
+
+
 def matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike | streaming_matrix.StreamingMatrix,
     *,
     stddev: float,
     prng_key: jax.Array | int | None = None,
     dtype: jax.typing.DTypeLike | None = None,
-    intermediate_strategy: SupportedStrategies = SupportedStrategies.DEFAULT,
+    intermediate_strategy: ShardingStrategies = ShardingStrategies.DEFAULT,
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer that adds correlated noise to gradients.
 
@@ -142,7 +147,7 @@ def matrix_factorization_privatizer(
   the input dtype.
 
   For naming of these parameters, see the `matrix_factorization README
-  <https://github.com/google-deepmind/jax_privacy/blob/main/jax_privacy/matrix_factorization/README.md>`_.
+  <https://github.com/google-parfait/jax_privacy/blob/main/jax_privacy/matrix_factorization/README.md>`_.
 
   Args:
     noising_matrix: A matrix used to generate correlated noise. Noise samples
@@ -227,7 +232,7 @@ def _dense_matrix_factorization_privatizer(
     *,
     stddev: float,
     prng_key: jax.Array,
-    strategy: _IntermediateStrategy,
+    strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer from a dense matrix C^{-1}."""
@@ -271,7 +276,7 @@ def _streaming_matrix_factorization_privatizer(
     *,
     stddev: float,
     prng_key: jax.Array,
-    strategy: _IntermediateStrategy,
+    strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer from a StreamingMatrix C^{-1}."""

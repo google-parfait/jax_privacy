@@ -30,10 +30,12 @@ import contextlib
 import copy
 import dataclasses
 import functools
-from typing import TYPE_CHECKING, TypeAlias
+import math
+from typing import Any, TYPE_CHECKING, TypeAlias
 
 from absl import logging
 import jax
+from jax_privacy import _data_loading
 from jax_privacy import _validate
 from jax_privacy import batch_selection
 import numpy as np
@@ -84,9 +86,18 @@ def hoist_closed_over_constants():
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class PadToMultiple:
-  """Pads each batch to a multiple of ``multiple`` to bound recompilations."""
+  """Pads each batch to a multiple of ``multiple`` to bound recompilations.
 
-  multiple: int = 32
+  If ``multiple`` is ``None`` (the default), batches are padded to the maximum
+  batch size encountered across the run (rounded up to a multiple of
+  ``microbatch_size`` if set), so ``train_step`` is compiled once.
+
+  Note: Because the compiled batch size(s) depend on the sampled batches, the
+  compilation cache (as well as step timing and memory usage) can leak
+  information about the secret batch selection if exposed to an adversary.
+  """
+
+  multiple: int | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -110,12 +121,20 @@ def batch_sharding(
   return jax.sharding.NamedSharding(mesh, spec)
 
 
-def _abstract_batch_and_padding(dataset, size, sharding=None):
+def _abstract_batch_and_padding(
+    dataset, size, sharding=None, padding_example=None
+):
   """Returns abstract ``(batch, is_padding)`` inputs of the given size."""
+  if padding_example is not None:
+    dataset, dim = padding_example, 0
+  elif _data_loading.is_map_dataset(dataset):
+    dataset, dim = dataset[0], 0
+  else:
+    dim = 1
 
   def _to_abstract(x):
     return jax.ShapeDtypeStruct(
-        (size, *x.shape[1:]), x.dtype, sharding=sharding
+        (size, *x.shape[dim:]), x.dtype, sharding=sharding
     )
 
   return jax.tree.map(_to_abstract, dataset), _to_abstract(np.bool_(False))
@@ -125,14 +144,33 @@ def _dry_run_state(
     dataset: training.Dataset,
     state: training.TrainingState,
     rng_or_seed: np.random.Generator | int | None,
+    padding_example: Any = None,
 ) -> tuple[np.random.Generator, int, training.TrainingState, jax.Array]:
   """Eval-shape setup; draws the same rng as training for JIT cache hits."""
   rng = copy.deepcopy(np.random.default_rng(rng_or_seed))
   seed = rng.integers(2**63)
-  n = _validate.batch(dataset)
+  if _data_loading.is_map_dataset(dataset):
+    n = len(dataset)
+  else:
+    n = _validate.batch(dataset, padding_example)
   state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
   key = jax.ShapeDtypeStruct.like(jax.random.key(seed))
   return rng, n, state, key
+
+
+def _max_padded_batch_size(
+    strategy: batch_selection.BatchSelectionStrategy,
+    num_examples: int,
+    rng: np.random.Generator | int | None = None,
+    microbatch_size: int | None = None,
+) -> int:
+  """Returns the max batch size rounded up to a multiple of microbatch_size."""
+  # Dry-run the batch iterator on a copy of rng so the caller's generator state
+  # is preserved, then round the max size up to a multiple of microbatch_size.
+  batches = strategy.batch_iterator(num_examples, rng=copy.deepcopy(rng))
+  max_batch = max(idx.size for idx in batches)
+  mb = microbatch_size or 1
+  return max(mb, math.ceil(max_batch / mb) * mb)
 
 
 def precompile(
@@ -167,17 +205,30 @@ def precompile(
 
   # This rng matches the one used in training, so even though the batch iterator
   # is stochastic, the batch sizes and hence compiled functions will match.
-  rng, n, state, key = _dry_run_state(dataset, state, rng_or_seed)
+  rng, n, state, key = _dry_run_state(
+      dataset, state, rng_or_seed, trainer.padding_example
+  )
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
+  microbatch_size = trainer.performance_flags.microbatch_size
+  if strategy.multiple is None:
+    multiple = _max_padded_batch_size(batch_strategy, n, rng, microbatch_size)
+    strategy = PadToMultiple(multiple=multiple)
+    trainer = dataclasses.replace(trainer, compilation_strategy=strategy)
   futures: dict[int, PrecompiledFuture] = {}
   with hoist_closed_over_constants():
     for idx in batch_strategy.batch_iterator(n, rng=rng):
-      padded = batch_selection.pad_to_multiple_of(idx, strategy.multiple)
+      padded = batch_selection.pad_to_multiple_of(
+          idx,
+          strategy.multiple,
+          microbatch_size=microbatch_size,
+      )
       batch_size = padded.size
       if batch_size in futures:
         continue
-      batch, pad = _abstract_batch_and_padding(dataset, batch_size, sharding)
+      batch, pad = _abstract_batch_and_padding(
+          dataset, batch_size, sharding, trainer.padding_example
+      )
 
       # The compilation cache leaks the compiled batch size(s), which depend on
       # the sampled batches -- a technical DP violation if it is part of output.
@@ -263,7 +314,9 @@ def _autotune(
   logging.info("[JAX-Privacy] Found per-chip HBM limit: %s", limit)
   budget = limit * hbm_safety_fraction if limit is not None else None
 
-  rng, n, state, key = _dry_run_state(dataset, state, rng_or_seed)
+  rng, n, state, key = _dry_run_state(
+      dataset, state, rng_or_seed, trainer.padding_example
+  )
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
   max_batch = max(idx.size for idx in batch_strategy.batch_iterator(n, rng=rng))
@@ -284,7 +337,9 @@ def _autotune(
     """Compile-verifies a microbatch size and measures its peak (memoized)."""
     pad = int(-(-max_batch // microbatch) * microbatch)
     resolved = _resolve(microbatch, pad)
-    batch, padding = _abstract_batch_and_padding(dataset, pad, sharding)
+    batch, padding = _abstract_batch_and_padding(
+        dataset, pad, sharding, trainer.padding_example
+    )
     compiled, peak = _compile_and_peak(resolved, state, batch, padding, key)
     fits = compiled is not None and (budget is None or peak <= budget)
     return _Candidate(

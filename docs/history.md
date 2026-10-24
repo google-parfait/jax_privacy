@@ -88,7 +88,7 @@ organized into six flat pillar modules.
     </tr>
     <tr>
       <td><strong>Core Primitives</strong></td>
-      <td>Fast per-example clipping and Gaussian noise in <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py">GradientComputer</a>, paired with dataset iterators in the experiment pipeline.</td>
+      <td>Fast per-example clipping and Gaussian noise in <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py">GradientComputer</a>, paired with dataset iterators in the experiment pipeline.</td>
       <td>Six flat pillar modules: <a href="_autosummary_output/jax_privacy.clipping.html"><code>clipping</code></a>, <a href="_autosummary_output/jax_privacy.noise_addition.html"><code>noise_addition</code></a>, <a href="_autosummary_output/jax_privacy.batch_selection.html"><code>batch_selection</code></a>, <a href="_autosummary_output/jax_privacy.accounting.html"><code>accounting</code></a>, <a href="_autosummary_output/jax_privacy.auditing.html"><code>auditing</code></a>, and <a href="_autosummary_output/jax_privacy.optimizers.html"><code>optimizers</code></a>.</td>
     </tr>
     <tr>
@@ -109,12 +109,12 @@ organized into six flat pillar modules.
     <tr>
       <td><strong>Domain Pipelines</strong></td>
       <td><strong>In Scope:</strong> Bundled end-to-end vision pipelines (EMA averaging, auto-tuning, evaluators).</td>
-      <td><strong>Out of Scope:</strong> Domain-specific pipelines live in downstream libraries (e.g., <a href="https://github.com/google/dpsynth">DPSynth</a>).</td>
+      <td><strong>Out of Scope:</strong> Domain-specific pipelines live in downstream libraries (e.g., <a href="https://github.com/google-parfait/dpsynth">DPSynth</a>).</td>
     </tr>
     <tr>
       <td><strong>Binaries &amp; Runners</strong></td>
       <td><strong>In Scope:</strong> Included Jaxline CLI entrypoints, launch scripts, and paper-specific experiment configs.</td>
-      <td><strong>Out of Scope:</strong> Pure importable library; runnable scripts live in a standalone <a href="https://github.com/google-deepmind/jax_privacy/tree/main/examples">examples/</a> directory.</td>
+      <td><strong>Out of Scope:</strong> Pure importable library; runnable scripts live in a standalone <a href="https://github.com/google-parfait/jax_privacy/tree/main/examples">examples/</a> directory.</td>
     </tr>
   </tbody>
 </table>
@@ -125,10 +125,10 @@ Click any pillar below to expand its technical details and Before / After
 comparisons:
 
 *   <details>
-    <summary><strong>Gradient Clipping (<code>clipping.py</code>):</strong> Generalizes <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py">DpsgdGradientComputer</a> into a <code>jax.grad</code>-style <code>clipped_grad</code> primitive supporting sum-based aggregation, microbatching, and pre-clipping transforms.</summary>
+    <summary><strong>Gradient Clipping (<code>clipping.py</code>):</strong> Generalizes <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py">DpsgdGradientComputer</a> into a <code>jax.grad</code>-style <code>clipped_grad</code> primitive supporting sum-based aggregation, microbatching, and pre-clipping transforms.</summary>
 
     *   **Sum-Based Aggregation:** Originally,
-        [gradient clipping](https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/grad_clipping.py)
+        [gradient clipping](https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/grad_clipping.py)
         averaged per-example gradients over the batch axis for fixed-size
         batches. To support variable-size batches (such as under Poisson
         subsampling, where dividing by a random batch size $|B|$ changes the
@@ -201,7 +201,7 @@ comparisons:
     <summary><strong>Noise Addition (<code>noise_addition.py</code>):</strong> Decouples noise addition from clipping and expresses stateful correlated noise as a standard <code>optax.GradientTransformation</code>.</summary>
 
     *   **Decoupled Clipping and Noise:** Originally,
-        [GradientComputer](https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py)
+        [GradientComputer](https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/dp_sgd/gradients.py)
         combined per-example gradient clipping with i.i.d. Gaussian noise
         addition in a single class, which was natural for standard DP-SGD. In
         the rewrite, {mod}`~jax_privacy.clipping` and
@@ -214,7 +214,7 @@ comparisons:
         their own training loops, checkpointing, and optimizer state containers,
         where plugging in an Optax transformation is much simpler than adopting a
         separate
-        [dp_updater.py](https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/dp_updater.py)
+        [dp_updater.py](https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/dp_updater.py)
         or manually threading custom privatizer state. Because the current
         library expresses stateful correlated noise as a standard
         {class}`optax.GradientTransformation`, Tunix chains the privatizer with
@@ -254,7 +254,7 @@ comparisons:
     </details>
 
 *   <details>
-    <summary><strong>Mechanism Definition &amp; Configuration (<code>execution_plan.py</code>):</strong> Generalizes <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/algorithm_config.py">AlgorithmConfig</a> and <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/algorithm_config.py">DpsgdConfig</a> into <code>BandMFConfig</code> and a verified <code>DPExecutionPlan</code>.</summary>
+    <summary><strong>Mechanism Definition &amp; Configuration (<code>execution_plan.py</code>):</strong> Generalizes <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/algorithm_config.py">AlgorithmConfig</a> and <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/training/algorithm_config.py">DpsgdConfig</a> into <code>BandMFConfig</code> and a verified <code>DPExecutionPlan</code>.</summary>
 
     While a single noise multiplier was convenient for parameterizing simple
     DP-SGD sweeps in the original package, it does not by itself characterize a
@@ -272,7 +272,7 @@ comparisons:
     </details>
 
 *   <details>
-    <summary><strong>Privacy Accounting (<code>accounting.py</code>):</strong> Streamlines the <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/accounting/accountants.py">accounting</a> and <a href="https://github.com/google-deepmind/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/accounting/calibrate.py">calibration</a> subpackage into lightweight <code>dp_accounting.DpEvent</code> builders.</summary>
+    <summary><strong>Privacy Accounting (<code>accounting.py</code>):</strong> Streamlines the <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/accounting/accountants.py">accounting</a> and <a href="https://github.com/google-parfait/jax_privacy/blob/95870e4d6b9999f849f5426ba3dfab82a20a2317/jax_privacy/accounting/calibrate.py">calibration</a> subpackage into lightweight <code>dp_accounting.DpEvent</code> builders.</summary>
 
     The original package maintained a five-file accounting subpackage with
     experiment-specific accountant classes, caching hierarchies, and custom

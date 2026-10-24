@@ -121,34 +121,63 @@ def _normal_llrs(
 
 
 def _sliding_dot_products_and_squared_norms(
-    samples: np.ndarray, c_col: np.ndarray
+    samples: np.ndarray, kernel: np.ndarray, num_shifts: int | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
-  """Returns <C e_i, y> for each sample y and |C e_i|^2, for all rounds i.
+  """Returns <k_i, y> for each sample y and |k_i|^2, for shifts i < num_shifts.
 
-  Column i of the banded Toeplitz matrix C contains ``c_col`` starting at row i
-  and cut off at the last round, so the dot products are a sliding window and
-  the squared norms of the last ``c_col.size - 1`` columns are partial
-  cumulative sums. Computing all dot products at once via convolution is more
-  efficient than one round at a time, at the cost of added memory.
+  Here k_i is ``kernel`` shifted down by i rounds and cut off at the last round:
+  column i of the banded Toeplitz matrix C when ``kernel`` is ``c_col``, or the
+  i-th balls-in-bins mode when ``kernel`` is the first mode. The dot products
+  are a sliding window of the sample against the kernel, and the squared norms
+  are prefix sums of the squared kernel. Computing all dot products at once via
+  FFT costs O(m log m) per sample with m = ``kernel.size + num_shifts``, versus
+  O(kernel.size * num_shifts) directly.
 
   Args:
     samples: 2D array of shape ``(iterations, num_samples)``.
-    c_col: 1D array of non-zero entries in the first column of C.
+    kernel: 1D array.
+    num_shifts: The number of shifts, defaulting to ``iterations``. Kernels
+      shifted past the last round are zero.
 
   Returns:
-    A tuple of (i) the dot products, with the same shape as ``samples``, and
-    (ii) the squared norms, of shape ``(iterations,)``.
+    A tuple of (i) the dot products, of shape ``(num_shifts, num_samples)``,
+    and (ii) the squared norms, of shape ``(num_shifts,)``.
   """
   iterations = samples.shape[0]
-  if c_col.size == 0:
-    return np.zeros_like(samples), np.zeros(iterations)
+  if num_shifts is None:
+    num_shifts = iterations
+  if kernel.size == 0:
+    return np.zeros((num_shifts, samples.shape[1])), np.zeros(num_shifts)
+  # Rows past the last window are irrelevant, and zero padding lets the window
+  # slide past the last round.
+  num_rows = kernel.size + num_shifts - 1
+  padded = np.pad(samples, ((0, max(num_rows - iterations, 0)), (0, 0)))
   dot_products = sp.signal.fftconvolve(
-      samples, c_col[::-1, None], mode='full', axes=0
-  )[c_col.size - 1 : c_col.size - 1 + iterations]
-  cumulative_squared_norms = np.cumsum(c_col**2)
-  squared_norms = np.full(iterations, cumulative_squared_norms[-1])
-  squared_norms[-1 : -c_col.size : -1] = cumulative_squared_norms[:-1]
+      padded[:num_rows], kernel[::-1, np.newaxis], mode='valid', axes=0
+  )
+  # |k_i|^2 = |kernel[:iterations - i]|^2.
+  prefix_norms = np.concatenate([[0.0], np.cumsum(kernel**2)])
+  squared_norms = prefix_norms[
+      np.clip(iterations - np.arange(num_shifts), 0, kernel.size)
+  ]
   return dot_products, squared_norms
+
+
+@functools.lru_cache(maxsize=1)
+def _balls_in_bins_first_mode(
+    iterations: int,
+    cycle_length: int,
+    c_col_tuple: tuple[float, ...],
+) -> np.ndarray:
+  """Computes and caches Cx for x = 1 in every cycle_length-th round from 0.
+
+  Since C is lower-triangular Toeplitz, the mode for the pattern starting at
+  round j is this mode shifted down by j rows (and truncated).
+  """
+  # Need a tuple input for caching.
+  c_col = np.array(c_col_tuple)
+  x = (np.arange(iterations) % cycle_length == 0).astype(float)
+  return _banded_c_times_x(c_col, x)
 
 
 @functools.lru_cache(maxsize=1)
@@ -158,12 +187,31 @@ def _all_balls_in_bins_modes(
     c_col_tuple: tuple[float, ...],
 ) -> np.ndarray:
   """Computes and caches all modes induced by balls-in-bins."""
-  # Need a tuple input for caching.
-  c_col = np.array(c_col_tuple)
-  x = np.arange(iterations) % cycle_length == 0
-  first_mode = _banded_c_times_x(c_col, x)
-  zeros_vector = np.zeros(cycle_length, dtype=np.float32)
-  return sp.linalg.toeplitz(first_mode, zeros_vector)
+  first_mode = _balls_in_bins_first_mode(iterations, cycle_length, c_col_tuple)
+  return sp.linalg.toeplitz(first_mode, np.zeros(cycle_length))
+
+
+def balls_in_bins_modes(
+    strategy: batch_selection.BallsInBinsSampling, c_col: np.ndarray
+) -> np.ndarray:
+  """Returns all modes of the mixture induced by balls-in-bins sampling.
+
+  Args:
+    strategy: The balls-in-bins sampling strategy.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+
+  Returns:
+    An array of shape ``(strategy.iterations, strategy.cycle_length)`` whose
+    columns are the equally likely means of the positive distribution in the
+    dominating pair.
+  """
+  _validate_c_col(c_col)
+  return _all_balls_in_bins_modes(
+      strategy.iterations,
+      strategy.cycle_length,
+      tuple(c_col[: strategy.iterations]),
+  )
 
 
 def _sample_balls_in_bins_modes(
@@ -607,15 +655,17 @@ def _compute_balls_in_bins_privacy_loss(
   _validate_c_col(c_col)
   if c_col.size > iterations:
     c_col = c_col[:iterations]
-  modes_matrix = _all_balls_in_bins_modes(
-      iterations, epoch_length, tuple(c_col)
+  # Mode j is the first mode shifted down by j rounds, so this is far cheaper
+  # than multiplying by the dense mode matrix, which is mostly zeros for banded
+  # C.
+  first_mode = _balls_in_bins_first_mode(iterations, epoch_length, tuple(c_col))
+  dot_products, squared_mode_norms = _sliding_dot_products_and_squared_norms(
+      sample, first_mode, num_shifts=epoch_length
   )
-  # dot_products[i, j] = <mode_i, sample_j>
-  dot_products = np.dot(modes_matrix.T, sample)
-  squared_mode_norms = (modes_matrix**2).sum(axis=0)[:, np.newaxis]
-  llrs = _normal_llrs(dot_products, squared_mode_norms, sigma, mode_scale)
-  privacy_loss = sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
-  return privacy_loss
+  llrs = _normal_llrs(
+      dot_products, squared_mode_norms[:, np.newaxis], sigma, mode_scale
+  )
+  return sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
 
 
 def _compute_cyclic_poisson_privacy_loss(

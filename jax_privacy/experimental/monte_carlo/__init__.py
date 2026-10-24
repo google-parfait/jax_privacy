@@ -19,5 +19,6 @@
    :nosignatures:
 
    delta_calculation
+   importance_sampling
    sample_generation
 """

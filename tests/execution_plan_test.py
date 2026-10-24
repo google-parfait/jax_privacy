@@ -125,11 +125,41 @@ class ExecutionPlanTest(parameterized.TestCase):
     )
     flags = execution_plan.PerformanceFlags(
         dtype=np.float64,
-        noise_seed=42,
         microbatch_size=4,
     )
-    plan = config.make(flags)
+    plan = config.make(flags, noise_seed=42)
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+
+  def test_make_noise_seed_takes_precedence(self):
+    config = BandMFConfig.default(
+        num_bands=2,
+        iterations=4,
+        expected_participations=1,
+        noise_multiplier=1.0,
+    )
+    grad = np.zeros(4, dtype=np.float32)
+
+    def first_step_noise(plan):
+      state = plan.noise_addition_transform.init(grad)
+      noisy, _ = plan.noise_addition_transform.update(grad, state)
+      return noisy
+
+    with self.assertLogs(level="WARNING"):
+      flags = execution_plan.PerformanceFlags(noise_seed=7)
+    np.testing.assert_allclose(
+        first_step_noise(config.make(flags)),
+        first_step_noise(config.make(noise_seed=7)),
+    )
+    np.testing.assert_allclose(
+        first_step_noise(config.make(flags, noise_seed=42)),
+        first_step_noise(config.make(noise_seed=42)),
+    )
+    self.assertFalse(
+        np.allclose(
+            first_step_noise(config.make(flags, noise_seed=42)),
+            first_step_noise(config.make(noise_seed=7)),
+        )
+    )
 
   def test_rmse_invariant_to_strategy_scale(self):
     # Scaling the strategy scales the noise stddev up and the noising matrix

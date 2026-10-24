@@ -20,6 +20,12 @@ more samples. In such cases, we recommend parallelizing sample generation. It
 may also be good to discretize the samples by rounding up to the nearest
 multiplier of some float and store the discretized samples as a histogram, since
 this reduces the memory overhead.
+
+Samples are drawn with importance sampling, which bounds each weighted sample by
+a constant B < 1 and so reduces the number of samples needed by roughly a factor
+of B. B depends on the noise multiplier (through the ratio of the largest mode
+norm to the noise scale), and for calibration, we conservatively use the largest
+B across the sweep.
 """
 
 import math
@@ -29,7 +35,7 @@ import dp_accounting
 from jax_privacy import accounting
 from jax_privacy import batch_selection
 from jax_privacy.experimental.monte_carlo import delta_calculation
-from jax_privacy.experimental.monte_carlo import sample_generation
+from jax_privacy.experimental.monte_carlo import importance_sampling
 import numpy as np
 
 
@@ -48,11 +54,6 @@ C_COL = C_COL / np.linalg.norm(C_COL)
 
 
 def main(_) -> None:
-  minimum_samples = delta_calculation.minimum_samples_to_calibrate(
-      BASE_DELTA, DELTA
-  )
-  print(f'Minimum samples to calibrate: {minimum_samples}')
-
   # We figure out a lower and upper bound on the noise multiplier necessary to
   # achieve (EPSILON, BASE_DELTA)-DP, and then define a sweep between these
   # bounds. Note that this is calibrating to BASE_DELTA, not DELTA.
@@ -96,38 +97,56 @@ def main(_) -> None:
   strategy = batch_selection.BallsInBinsSampling(
       cycle_length=EPOCH_LENGTH, iterations=ITERATIONS
   )
-  positive_samples = []
-  negative_samples = []
-  # This for loop is massively parallelizable! In addition, for larger numbers
-  # of samples, we need multiple calls to get_privacy_loss_sample with smaller
-  # values of num_samples to avoid out of memory errors. These calls can also
-  # be massively parallelized. For practical applications, we recommend
-  # parallelizing across these two dimensions in whatever manner best fits your
-  # workflow.
-  for nm in nm_sweep:
-    per_nm_positive_samples, _ = sample_generation.get_privacy_loss_sample(
+
+  # The optimal stretch factor and resulting bound on the weighted samples for
+  # each noise multiplier in the sweep.
+  kappas = [
+      importance_sampling.compute_kappa(strategy, nm, C_COL) for nm in nm_sweep
+  ]
+  alphas = [importance_sampling.optimal_stretch(EPSILON, k) for k in kappas]
+  support_bound = max(
+      math.exp(importance_sampling.log_support_bound(alpha, EPSILON, kappa))
+      for alpha, kappa in zip(alphas, kappas)
+  )
+  minimum_samples = delta_calculation.minimum_samples_to_calibrate(
+      BASE_DELTA, DELTA, support_bound
+  )
+  print(
+      f'Minimum samples to calibrate: {minimum_samples} (importance sampling,'
+      f' support bound {support_bound:.3f}) vs'
+      f' {delta_calculation.minimum_samples_to_calibrate(BASE_DELTA, DELTA)}'
+      ' (plain Monte Carlo)'
+  )
+
+  # These calls are massively parallelizable! In addition, for larger numbers
+  # of samples, we need multiple calls to get_importance_sampled_privacy_loss
+  # with smaller values of num_samples to avoid out of memory errors. These
+  # calls can also be massively parallelized. For practical applications, we
+  # recommend parallelizing across these two dimensions in whatever manner best
+  # fits your workflow.
+  def _sample(nm, alpha, positive_sample):
+    return importance_sampling.get_importance_sampled_privacy_loss(
         strategy=strategy,
         noise_multiplier=nm,
         c_col=C_COL,
-        positive_sample=True,
+        epsilon=EPSILON,
+        alpha=alpha,
+        positive_sample=positive_sample,
         num_samples=minimum_samples,
     )
-    per_nm_negative_samples, _ = sample_generation.get_privacy_loss_sample(
-        strategy=strategy,
-        noise_multiplier=nm,
-        c_col=C_COL,
-        positive_sample=False,
-        num_samples=minimum_samples,
-    )
-    positive_samples.append(per_nm_positive_samples)
-    negative_samples.append(per_nm_negative_samples)
+
+  positive_samples = [_sample(nm, a, True) for nm, a in zip(nm_sweep, alphas)]
+  negative_samples = [_sample(nm, a, False) for nm, a in zip(nm_sweep, alphas)]
 
   passes_verification, best_nm_index = (
       delta_calculation.perform_calibration_from_samples(
           EPSILON,
           DELTA,
-          positive_samples=positive_samples,
-          negative_samples=negative_samples,
+          positive_samples=[s.privacy_loss for s in positive_samples],
+          negative_samples=[s.privacy_loss for s in negative_samples],
+          positive_log_weights=[s.log_weights for s in positive_samples],
+          negative_log_weights=[s.log_weights for s in negative_samples],
+          support_bound=support_bound,
       )
   )
   if passes_verification:

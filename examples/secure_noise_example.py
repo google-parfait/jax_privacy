@@ -27,8 +27,8 @@ For cryptographic security, the PRNG is backed by hardware-level entropy
 (RDRAND) via ``randomgen.RDRAND()``. If ``randomgen`` is not installed, the
 example falls back to a standard NumPy PRNG with a warning.
 
-Privacy accounting uses the RDP accountant, as the discrete Gaussian is not
-currently supported by the PLD accountant.
+Privacy accounting is out of scope for this example, as Poisson-sampled discrete
+Gaussian noise is not supported by the accounting libraries we use.
 """
 
 import time
@@ -36,11 +36,9 @@ from typing import Mapping
 import warnings
 
 from absl import app
-import dp_accounting
 import jax
 import jax.numpy as jnp
 import jax_privacy
-from jax_privacy import accounting
 from jax_privacy import batch_selection
 from jax_privacy.experimental import discrete_gaussian
 import numpy as np
@@ -58,8 +56,7 @@ FEATURES = 100
 ITERATIONS = 500
 EXPECTED_BATCH_SIZE = 1000
 PADDING_MULTIPLE = 32
-EPSILON = 1.0
-DELTA = 1e-5
+NOISE_MULTIPLIER = 1.0
 LEARNING_RATE = 0.2
 L2_CLIP_NORM = 1.0
 GRID_SCALE = 10**9  # Number of integer grid steps per L2_CLIP_NORM.
@@ -146,23 +143,10 @@ def main(_):
       grid_scale=GRID_SCALE,
   )
 
-  # Calibrate noise multiplier using continuous Gaussian accounting.
-  make_event = lambda sigma: accounting.dpsgd_event(
-      sigma,
-      ITERATIONS,
-      sampling_prob=EXPECTED_BATCH_SIZE / USERS,
-      use_zcdp=True,
-  )
-  noise_multiplier = dp_accounting.calibrate_dp_mechanism(
-      dp_accounting.rdp.RdpAccountant,
-      make_event,
-      target_epsilon=EPSILON,
-      target_delta=DELTA,
-  )
   # The noise multiplier is relative to the L2 sensitivity. Since each rounded
   # per-example gradient has integer L2 norm at most GRID_SCALE, the L2
   # sensitivity of the sum (under add/remove) is GRID_SCALE.
-  discrete_sigma = noise_multiplier * grad_fn.sensitivity()
+  discrete_sigma = NOISE_MULTIPLIER * grad_fn.sensitivity()
 
   @jax.jit
   def train_step(

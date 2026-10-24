@@ -19,7 +19,7 @@ building blocks necessary to develop DP mechanisms for machine learning
 applications, alongside high-level training APIs ({mod}`~jax_privacy.training`
 and the [Keras API](keras_api.rst)) and worked [examples](examples_guide). For
 a high-level summary of what is in and out of scope for the library, see
-[Scope and Design Philosophy](https://github.com/google-deepmind/jax_privacy#scope-and-design-philosophy)
+[Scope and Design Philosophy](https://github.com/google-parfait/jax_privacy#scope-and-design-philosophy)
 in the repository README and the
 [accompanying paper](https://arxiv.org/abs/2602.17861).
 
@@ -105,9 +105,9 @@ noise addition, and the corresponding `DpEvent` into a verified
 {class}`~jax_privacy.execution_plan.DPExecutionPlan`. When you use the plan's
 components as documented to write your own training loop, the resulting loop
 inherits the stated DP guarantee *by construction*. See
-[`dp_sgd_transformer.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_sgd_transformer.py)
+[`dp_sgd_transformer.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/dp_sgd_transformer.py)
 and
-[`dp_logistic_regression.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_logistic_regression.py)
+[`dp_logistic_regression.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/dp_logistic_regression.py)
 for examples.
 
 ### Tier 3: Core API (low-level building blocks)
@@ -129,9 +129,9 @@ as the building blocks for *proving* DP for the higher-level compositions. The
 risk at this tier is in *composition*: wiring components together incorrectly
 (e.g., calibrating noise to the wrong sensitivity, or using an accounting method
 that does not match the batch selection strategy). See
-[`jax_api_example.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/jax_api_example.py)
+[`jax_api_example.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/jax_api_example.py)
 and
-[`balls_in_bins_accounting.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)
+[`balls_in_bins_accounting.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)
 for examples.
 
 ### Your responsibilities at each tier

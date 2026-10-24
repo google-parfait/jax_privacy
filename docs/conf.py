@@ -105,7 +105,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 html_theme = 'sphinx_book_theme'
 html_theme_options = {
     'show_toc_level': 2,
-    'repository_url': 'https://github.com/google-deepmind/jax_privacy',
+    'repository_url': 'https://github.com/google-parfait/jax_privacy',
     'use_repository_button': True,
 }
 

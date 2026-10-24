@@ -40,7 +40,7 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     to output a sensitivity-bounded slack indicator from the gradient norm,
     enabling downstream adaptive clipping-bound controllers. This is a building
     block for the [SLAClip](https://icml.cc/virtual/2026/poster/66390)
-    approach. ([#343](https://github.com/google-deepmind/jax_privacy/pull/343))
+    approach. ([#343](https://github.com/google-parfait/jax_privacy/pull/343))
 -   **Documentation improvements**:
     -   **API documentation rendering**: Greatly improved documentation across
         `.md`, `.rst`, and `.py` files for better rendering of math, code, and
@@ -51,7 +51,7 @@ The format is based on https://keepachangelog.com/en/1.1.0/
         covering pitfalls across data loading, clipping, composition, and model
         architecture, and explaining how the design of `jax_privacy` prevents
         or mitigates them.
-        ([#362](https://github.com/google-deepmind/jax_privacy/pull/362))
+        ([#362](https://github.com/google-parfait/jax_privacy/pull/362))
     -   **Batch selection**: Added the
         [Batch Selection Strategies guide](https://jax-privacy.readthedocs.io/en/latest/batch_selection.html)
         documenting supported batch selection strategies and their privacy
@@ -97,14 +97,14 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     `compute_banded_inverse_sensitivity()`, and
     `optimize_banded_inverse_toeplitz()`. Based on
     [arXiv:2505.12128](https://arxiv.org/abs/2505.12128).
-    ([#218](https://github.com/google-deepmind/jax_privacy/pull/218))
+    ([#218](https://github.com/google-parfait/jax_privacy/pull/218))
 -   **Experimental `pre_clipping_transforms` API**: Allows optimizers to define
     custom pre-clipping transforms.
 -   **Truncation support for b-min-sep sampling**: Added to both sample
     generation and privacy loss computation.
 -   **Keras Poisson opt-in example**: Demonstrates Poisson sampling support
     using the Keras API.
-    ([#196](https://github.com/google-deepmind/jax_privacy/pull/196))
+    ([#196](https://github.com/google-parfait/jax_privacy/pull/196))
 
 ### Changed
 
@@ -126,19 +126,19 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 -   **`clipped_fun` `return_norms` output contract**: Fixed incorrect return
     shape `(value, ((), norms))` → `(value, norms)` when `has_aux=False`.
     Regression test added.
-    ([#224](https://github.com/google-deepmind/jax_privacy/pull/224))
+    ([#224](https://github.com/google-parfait/jax_privacy/pull/224))
 -   **`ZeroDivisionError` in zCDP accounting**: Fixed crash when
     `noise_multiplier=0` by guarding the division in the zCDP branch and
     returning `ZCDpEvent(inf)` (rho → ∞, i.e., no privacy). Includes regression
-    test. ([#255](https://github.com/google-deepmind/jax_privacy/pull/255))
+    test. ([#255](https://github.com/google-parfait/jax_privacy/pull/255))
 -   **JAX v0.9.0 / NumPy 2.4.0 compatibility**: Fixed implicit JAX array to
     dtype conversion warnings that would become errors in future versions.
 -   **Keras Poisson example regression**: Increased batch size 128→512, seeded
     Keras init for reproducibility, aligned Poisson sampling with accountant.
-    ([#222](https://github.com/google-deepmind/jax_privacy/pull/222))
+    ([#222](https://github.com/google-parfait/jax_privacy/pull/222))
 -   **Flaky `test_dp_training_e2e_work`**: Seeded Keras/JAX RNG to eliminate
     test flakiness.
-    ([#264](https://github.com/google-deepmind/jax_privacy/pull/264))
+    ([#264](https://github.com/google-parfait/jax_privacy/pull/264))
 
 ### Internal / Cleanups
 
@@ -245,7 +245,7 @@ and expanded support for matrix factorization mechanisms.
 
 -   First official stable release of JAX-Privacy — a library for
     privacy-preserving machine learning in
-    JAX.[(#24)](https://github.com/google-deepmind/jax_privacy/pull/24)
+    JAX.[(#24)](https://github.com/google-parfait/jax_privacy/pull/24)
 -   Full support for DP-SGD training with JAX, including integration with:
     -   Raw JAX training pipelines
     -   Flax Linen API
@@ -269,10 +269,10 @@ and expanded support for matrix factorization mechanisms.
 
 <!-- disableFinding(LINK_UNUSED_ID) -->
 
-[unreleased]: https://github.com/google-deepmind/jax_privacy/compare/v2.2.0...HEAD.
-[2.2.0]: https://github.com/google-deepmind/jax_privacy/compare/v2.0.0...v2.2.0.
-[2.0.0]: https://github.com/google-deepmind/jax_privacy/compare/v1.0.0...v2.0.0.
+[unreleased]: https://github.com/google-parfait/jax_privacy/compare/v2.2.0...HEAD.
+[2.2.0]: https://github.com/google-parfait/jax_privacy/compare/v2.0.0...v2.2.0.
+[2.0.0]: https://github.com/google-parfait/jax_privacy/compare/v1.0.0...v2.0.0.
 
 <!-- enableFinding(LINK_UNUSED_ID) -->
 
-[1.0.0]: https://github.com/google-deepmind/jax_privacy/compare/v0.2...v1.0.0.
+[1.0.0]: https://github.com/google-parfait/jax_privacy/compare/v0.2...v1.0.0.

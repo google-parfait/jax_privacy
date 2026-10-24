@@ -548,6 +548,38 @@ class ClipTransformTest(parameterized.TestCase):
     chex.assert_trees_all_close(value, 14.0)
     chex.assert_trees_all_close(norms, jnp.array([1.0, 4.0, 9.0]))
 
+  @parameterized.parameters([None, 1, 2])
+  def test_padding_examples_mask_aux_and_norms_with_nan(self, microbatch_size):
+    def fun(x):
+      aux = {
+          'double': 2.0 * x,
+          'vec': jnp.stack([x, -x]),
+          'none_val': None,
+      }
+      return x**2, aux
+
+    sum_clip = clipping.clipped_fun(
+        fun,
+        has_aux=True,
+        batch_argnums=0,
+        keep_batch_dim=False,
+        l2_clip_norm=jnp.inf,
+        return_norms=True,
+        microbatch_size=microbatch_size,
+    )
+    data = jnp.array([1.0, 2.0, 3.0, 4.0])
+    is_padding = jnp.array([False, True, True, True])
+    value, (aux, norms) = sum_clip(data, is_padding_example=is_padding)
+
+    chex.assert_trees_all_close(value, 1.0)
+    np.testing.assert_allclose(norms[0], 1.0)
+    self.assertTrue(np.all(np.isnan(norms[1:])))
+    np.testing.assert_allclose(aux['double'][0], 2.0)
+    self.assertTrue(np.all(np.isnan(aux['double'][1:])))
+    np.testing.assert_allclose(aux['vec'][0], np.array([1.0, -1.0]))
+    self.assertTrue(np.all(np.isnan(aux['vec'][1:])))
+    self.assertIsNone(aux['none_val'])
+
   @parameterized.product(
       arg_dtype=[jnp.float16, jnp.bfloat16, jnp.float32],
       output_dtype=[jnp.float32, None],

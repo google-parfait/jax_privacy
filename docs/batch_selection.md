@@ -60,9 +60,9 @@ In the context of batch selection:
     construction. Currently supports
     {class}`~jax_privacy.batch_selection.CyclicPoissonSampling` variants
     (including truncated Poisson and fixed-order multi-epoch). See
-    [`dp_sgd_transformer.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_sgd_transformer.py)
+    [`dp_sgd_transformer.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/dp_sgd_transformer.py)
     and
-    [`dp_logistic_regression.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/dp_logistic_regression.py)
+    [`dp_logistic_regression.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/dp_logistic_regression.py)
     for examples.
 
 *   **Tier 3 (Core API)**: Users compose {mod}`~jax_privacy.batch_selection`,
@@ -72,9 +72,9 @@ In the context of batch selection:
     with **any** noise addition scheme and **any** `DpEvent` — including Monte
     Carlo accounting via {mod}`~jax_privacy.experimental.monte_carlo` for
     combinations where PLD/RDP accounting is not available. See
-    [`jax_api_example.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/jax_api_example.py)
+    [`jax_api_example.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/jax_api_example.py)
     and
-    [`balls_in_bins_accounting.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)
+    [`balls_in_bins_accounting.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)
     for examples.
 
 ---
@@ -434,7 +434,7 @@ to accountant support and available privacy metrics.
 *   **jax_privacy support**: ✅ Batch selection via
     {class}`~jax_privacy.batch_selection.BallsInBinsSampling`. Accounting via
     Monte Carlo (see
-    [`balls_in_bins_accounting.py`](https://github.com/google-deepmind/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)).
+    [`balls_in_bins_accounting.py`](https://github.com/google-parfait/jax_privacy/tree/main/examples/balls_in_bins_accounting.py)).
 
 (chua-2024a)=
 ### Chua+ 2024a: Scalable DP-SGD: Shuffling vs. Poisson Subsampling

@@ -21,6 +21,8 @@ import numpy as np
 import numpy.typing as npt
 import scipy
 
+from ... import _validate
+
 DpEventOrAccountant = (
     dp_accounting.dp_event.DpEvent | dp_accounting.pld.PLDAccountant
 )
@@ -65,8 +67,7 @@ def _hoeffding_bound(
   Returns:
     The KL-Hoeffding bound on the probability.
   """
-  if tau < 1:
-    raise ValueError('tau must be at least 1.')
+  _validate.in_range(1, np.inf, tau=tau)
   # Callers keep tau * delta <= support_bound, but rounding can push the ratio
   # just above 1, where _kl would take the log of a negative number.
   return np.exp(
@@ -119,10 +120,8 @@ def get_overall_delta(
     verification and then running the best verified mechanism is (epsilon,
     overall_delta)-DP.
   """
-  if base_delta <= 0 or base_delta > 1:
-    raise ValueError('base_delta must be in (0, 1].')
-  if num_samples <= 0:
-    raise ValueError('num_samples must be positive.')
+  _validate.in_range(0, 1, closed='right', base_delta=base_delta)
+  _validate.positive(num_samples=num_samples)
   _validate_support_bound(support_bound, base_delta)
 
   def overall_delta_from_tau(tau):
@@ -161,10 +160,9 @@ def minimum_samples_to_calibrate(
   Returns:
     The minimum number of samples needed to calibrate to target_delta.
   """
-  if base_delta <= 0 or base_delta > 1:
-    raise ValueError('base_delta must be in (0, 1].')
-  if target_delta <= 0 or target_delta > 1:
-    raise ValueError('target_delta must be in (0, 1].')
+  _validate.in_range(
+      0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
+  )
   if target_delta <= base_delta:
     raise ValueError('target_delta must be > base_delta.')
   _validate_support_bound(support_bound, target_delta)
@@ -227,10 +225,8 @@ def get_base_delta(
     The base_delta such that we use Monte Carlo verification to check if each
     mechanism satisfies (epsilon, base_delta)-DP.
   """
-  if num_samples <= 0:
-    raise ValueError('num_samples must be positive.')
-  if target_delta <= 0 or target_delta > 1:
-    raise ValueError('target_delta must be in (0, 1].')
+  _validate.positive(num_samples=num_samples)
+  _validate.in_range(0, 1, closed='right', target_delta=target_delta)
   _validate_support_bound(support_bound, target_delta)
 
   def _excess_delta(base_delta):
@@ -294,8 +290,7 @@ def delta_from_epsilon_and_samples(
     divergence.
   """
   samples = np.asarray(samples)
-  if epsilon < 0:
-    raise ValueError('epsilon must be non-negative.')
+  _validate.non_negative(epsilon=epsilon)
   if samples.ndim != 1:
     raise ValueError('samples must be a 1D array.')
   for name, value in [('counts', counts), ('log_weights', log_weights)]:

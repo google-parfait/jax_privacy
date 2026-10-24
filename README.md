@@ -64,7 +64,7 @@ the three API tiers, see the [Library Overview][overview-doc].
     "DP Fine-Tuning of Language Models" or "DP Synthetic Data Generation" are
     not part of the core library, though users can easily use JAX Privacy to
     build them (see companion libraries like
-    [DPSynth](https://github.com/google/dpsynth)).
+    [DPSynth](https://github.com/google-parfait/dpsynth)).
 *   **Binaries and Surrounding Infrastructure**: As a library, JAX Privacy
     consists purely of importable Python code and does not house standalone
     production binaries, job orchestration, or serving infrastructure. Runnable
@@ -73,8 +73,8 @@ the three API tiers, see the [Library Overview][overview-doc].
 
 [overview-doc]: https://jax-privacy.readthedocs.io/en/latest/overview.html
 [keras-doc]: https://jax-privacy.readthedocs.io/en/latest/keras_api.html
-[training-py]: https://github.com/google-deepmind/jax_privacy/blob/main/jax_privacy/training.py
-[examples-dir]: https://github.com/google-deepmind/jax_privacy/tree/main/examples
+[training-py]: https://github.com/google-parfait/jax_privacy/blob/main/jax_privacy/training.py
+[examples-dir]: https://github.com/google-parfait/jax_privacy/tree/main/examples
 
 ## How to Cite This Repository <a id="citing"></a>
 
@@ -103,7 +103,7 @@ and Kairouz, Peter and McKenna, Ryan and McMahan, Brendan and Pappu, Aneesh and
 Ponomareva, Natalia and Pravilov, Mikhail and Rush, Keith and Smith, Samuel L
 and Stanforth, Robert and Mishra, Chaitanya},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
-  url = {http://github.com/google-deepmind/jax_privacy},
+  url = {http://github.com/google-parfait/jax_privacy},
   version = {2.3.0.dev0},
   year = {2026},
 }

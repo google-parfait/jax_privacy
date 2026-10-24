@@ -15,7 +15,7 @@ limitations under the License. -->
 # Troubleshooting
 
 If you don't find a solution for your problem here, look for similar
-[issues on our GitHub](https://github.com/google-deepmind/jax_privacy/issues).
+[issues on our GitHub](https://github.com/google-parfait/jax_privacy/issues).
 
 This documentation is in active development and we are still gathering most
 common pitfalls and issues that might arise during the use of our library. If

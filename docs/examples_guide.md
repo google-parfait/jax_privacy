@@ -15,7 +15,7 @@ limitations under the License. -->
 # Examples Guide
 
 The
-[`examples/`](https://github.com/google-deepmind/jax_privacy/tree/main/examples)
+[`examples/`](https://github.com/google-parfait/jax_privacy/tree/main/examples)
 directory contains runnable scripts and notebooks that demonstrate how to use
 the JAX Privacy building blocks. The examples fall into two broad categories:
 
@@ -213,6 +213,7 @@ different configurations.
 ### `balls_in_bins_accounting.py`
 
 Uses Monte Carlo accounting to calibrate the noise multiplier for DP-SGD
-under the "balls-in-bins" batch selection strategy. Demonstrates sample
-generation, noise multiplier sweeping, and verification-based calibration
-from the {mod}`jax_privacy.experimental.monte_carlo` module.
+under the "balls-in-bins" batch selection strategy. Demonstrates importance
+sampled privacy loss generation, noise multiplier sweeping, and
+verification-based calibration from the
+{mod}`jax_privacy.experimental.monte_carlo` module.

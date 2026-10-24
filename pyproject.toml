@@ -42,8 +42,8 @@ lint = [
     "pylint",
     "pylint-exit",
     "pyrefly",
-    "pyink",
-    "pyink[jupyter]",
+    "pyink<26.0.0",
+    "pyink[jupyter]<26.0.0",
 ]
 
 test = [
@@ -89,7 +89,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/google-deepmind/jax_privacy"
+Homepage = "https://github.com/google-parfait/jax_privacy"
 
 [tool.setuptools.packages.find]
 exclude = ["*_test.py", "examples*", "experiments*"]
@@ -133,4 +133,10 @@ python-version = "3.11"
 # `basic` is the preset Pyrefly applies to unconfigured projects; pin it so the
 # checker level does not silently change just because this config exists.
 preset = "basic"
+
+[tool.uv]
+override-dependencies = [
+  "typing-extensions>=4.15.0",
+]
+
 

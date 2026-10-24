@@ -58,4 +58,4 @@ authors:
 title: "JAX-Privacy"
 version: 1.1.0
 date-released: 2025-04-21
-url: "https://github.com/google-deepmind/jax_privacy"
+url: "https://github.com/google-parfait/jax_privacy"

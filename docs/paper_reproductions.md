@@ -19,7 +19,7 @@ The JAX-Privacy repository was initially released alongside the paper
 Scale](https://arxiv.org/abs/2204.13650). To reproduce the experiments in this
 paper exactly as they were run, you should clone an earlier version of the
 repository. Instructions can be found at
-[this README](https://github.com/google-deepmind/jax_privacy/tree/0e9d93966452a9ca022b9af9080341b84035bfd4/jax_privacy/experiments/image_classification).
+[this README](https://github.com/google-parfait/jax_privacy/tree/0e9d93966452a9ca022b9af9080341b84035bfd4/jax_privacy/experiments/image_classification).
 
 Moving forward, these experiments will no longer be maintained
 for the following reasons:

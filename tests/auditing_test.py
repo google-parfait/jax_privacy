@@ -770,6 +770,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     out_canary_scores = jnp.zeros((5,))
     auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
 
+  def test_num_canaries_property(self):
+    auditor = auditing.CanaryScoreAuditor(
+        [1.0, 2.0, 3.0], [-1.0, 0.0, 0.5, 1.5]
+    )
+    self.assertEqual(auditor.num_canaries, (3, 4))
+
 
 if __name__ == '__main__':
   absltest.main()

@@ -176,6 +176,63 @@ class GradientClippingTest(parameterized.TestCase):
     expected_grad = jnp.array([1.0 / 2.5])
     chex.assert_trees_all_close(sum_grads, expected_grad, atol=1e-6)
 
+  @parameterized.parameters([None, 1, 2])
+  def test_sum_clipped_grad_padding_masks_aux_outputs_with_nan(
+      self, microbatch_size
+  ):
+    params = jnp.array([2.0])
+    x = jnp.array([[1.0], [4.0], [7.0], [10.0]])
+    is_padding = jnp.array([False, True, True, True])
+
+    clipped_grad_fn = jax.jit(
+        gradient_clipping.clipped_grad(
+            mean_quadratic_loss_with_aux,
+            argnums=0,
+            has_aux=True,
+            return_values=True,
+            return_grad_norms=True,
+            batch_argnums=1,
+            l2_clip_norm=2.5,
+            rescale_to_unit_norm=False,
+            microbatch_size=microbatch_size,
+        )
+    )
+    sum_grads, aux_output = clipped_grad_fn(
+        params, x, is_padding_example=is_padding
+    )
+    chex.assert_trees_all_close(sum_grads, jnp.array([1.0]), atol=1e-6)
+    chex.assert_trees_all_close(aux_output.values[0], 0.5, atol=1e-6)
+    self.assertTrue(jnp.all(jnp.isnan(aux_output.values[1:])))
+    chex.assert_trees_all_close(aux_output.grad_norms[0], 1.0, atol=1e-6)
+    self.assertTrue(jnp.all(jnp.isnan(aux_output.grad_norms[1:])))
+    chex.assert_trees_all_close(
+        aux_output.aux['key'][0], jnp.array([1.0]), atol=1e-6
+    )
+    self.assertTrue(jnp.all(jnp.isnan(aux_output.aux['key'][1:])))
+
+    # Also verify AuxiliaryOutput when optional fields (grad_norms, aux) are
+    # None.
+    values_only_fn = jax.jit(
+        gradient_clipping.clipped_grad(
+            mean_quadratic_loss,
+            argnums=0,
+            has_aux=False,
+            return_values=True,
+            return_grad_norms=False,
+            batch_argnums=1,
+            l2_clip_norm=2.5,
+            rescale_to_unit_norm=False,
+            microbatch_size=microbatch_size,
+        )
+    )
+    _, values_only_aux = values_only_fn(
+        params, x, is_padding_example=is_padding
+    )
+    chex.assert_trees_all_close(values_only_aux.values[0], 0.5, atol=1e-6)
+    self.assertTrue(jnp.all(jnp.isnan(values_only_aux.values[1:])))
+    self.assertIsNone(values_only_aux.grad_norms)
+    self.assertIsNone(values_only_aux.aux)
+
   @parameterized.parameters([None, 1, 3])
   def test_sum_clipped_grad_has_aux(self, microbatch_size):
     params = jnp.array([2.0])

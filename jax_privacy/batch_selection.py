@@ -82,6 +82,7 @@ import itertools
 import math
 from typing import Iterator
 
+from absl import logging
 import numpy as np
 
 from . import _validate
@@ -113,6 +114,11 @@ class PartitionType(enum.Enum):
   """Each example will be assigned to a group independently at random."""
   EQUAL_SPLIT = enum.auto()
   """Examples will be shuffled and then split into groups of equal size."""
+
+
+def _get_dtype(num_examples: int) -> np.dtype:
+  """Returns the smallest signed integer dtype that fits ``num_examples``."""
+  return np.min_scalar_type(-(num_examples + 1))
 
 
 def _independent_partition(
@@ -205,9 +211,10 @@ def pad_to_multiple_of(
     indices: A 1D array of batch indices.
     multiple: A positive integer. The input batch will be padded to a multiple
       of this value.
-    microbatch_size: If set, reorders the padded indices so that padding
-      examples cluster into the last microbatches under Fortran-order reshaping.
-      See :func:`~jax_privacy.sharding_utils.compute_early_stopping_order`.
+    microbatch_size: If set, must divide ``multiple``. Reorders the padded
+      indices so that padding examples cluster into the last microbatches under
+      Fortran-order reshaping. See
+      :func:`~jax_privacy.sharding_utils.compute_early_stopping_order`.
 
   Returns:
     The padded array of indices.
@@ -216,6 +223,8 @@ def pad_to_multiple_of(
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
   if multiple <= 0:
     raise ValueError(f'Padding multiple must be positive, got {multiple}.')
+  if microbatch_size is not None and multiple % microbatch_size != 0:
+    raise ValueError(f'{multiple=} must be divisible by {microbatch_size=}.')
   curr_size = indices.shape[0]
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)
@@ -310,7 +319,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = _get_dtype(num_examples)
 
     if self.partition_type == PartitionType.INDEPENDENT:
       partition_fn = _independent_partition
@@ -365,7 +374,7 @@ class BallsInBinsSampling(BatchSelectionStrategy):
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = _get_dtype(num_examples)
     groups = _independent_partition(num_examples, self.cycle_length, rng, dtype)
 
     for i in range(self.iterations):
@@ -379,7 +388,9 @@ class RandomAllocationSampling(BatchSelectionStrategy):
   Each example independently selects exactly :math:`k` steps (out of the steps
   it is eligible for) to participate in, uniformly at random. For :math:`k=1`
   and ``cycle_length=1``, this participation pattern is equivalent to
-  BallsInBinsSampling.
+  BallsInBinsSampling, and for ``total_participations = ceil(iterations /
+  cycle_length)`` and ``sampling_prob < 1``, it recovers CyclicPoissonSampling
+  (without batch truncation).
 
   If ``cycle_length > 1``, each example is first independently assigned to one
   of ``cycle_length`` groups uniformly at random, and group :math:`j` is only
@@ -400,19 +411,15 @@ class RandomAllocationSampling(BatchSelectionStrategy):
     * https://arxiv.org/abs/2601.21636 (k>1)
     * https://arxiv.org/abs/2602.17284 (k>1)
     * https://arxiv.org/abs/2605.07072 (k>1)
+    * https://arxiv.org/abs/2610.12712 (cycle_length > 1, k > 1)
 
   Formal guarantees of the ``batch_iterator``:
     - All batches consist of indices in the range ``[0, num_examples)``.
     - Each example only appears in batches with index ``i`` such that
       ``i % cycle_length == j`` for some fixed ``j`` chosen uniformly at random
       independently for each example.
-    - If ``iterations`` is a multiple of ``cycle_length``, each example
-      appears in *exactly* :math:`k` of the batches it is eligible for, chosen
-      uniformly at random without replacement. More generally, each group
-      samples :math:`k` out of ``ceil(iterations / cycle_length)`` virtual
-      cycles uniformly at random without replacement, and the schedule is
-      truncated after ``iterations`` batches (so every group has the same
-      privacy guarantee and expected batch size).
+    - Each example appears in *exactly* :math:`k` of the batches it is eligible
+      for, chosen uniformly at random without replacement.
     - The allocation for each example is independent of all other examples.
 
   Accounting:
@@ -425,17 +432,27 @@ class RandomAllocationSampling(BatchSelectionStrategy):
 
   Attributes:
     total_participations: The number of eligible steps each example participates
-      in (k).
+      in (k). If ``iterations`` is not a multiple of ``cycle_length``, the
+      schedule runs as if for the next multiple of ``cycle_length`` and
+      truncates after ``iterations`` steps.
     iterations: The total number of iterations / batches to generate (t).
     cycle_length: If > 1, the examples are independently partitioned into
       ``cycle_length`` groups which participate in a round-robin fashion, so
       that each example participates at most once every ``cycle_length``
       iterations. ``cycle_length == 1`` retrieves standard random allocation.
+    partition_type: How to partition the examples into groups before random
+      allocation. ``INDEPENDENT`` is the default, while ``EQUAL_SPLIT`` shuffles
+      and splits into groups of equal size (discarding ``num_examples %
+      cycle_length`` examples).
+    sampling_prob: Probability of independently keeping each allocated
+      participation. Defaults to ``1.0`` (no subsampling).
   """
 
   total_participations: int
   iterations: int
   cycle_length: int = 1
+  partition_type: PartitionType = PartitionType.INDEPENDENT
+  sampling_prob: float = 1.0
 
   def __post_init__(self):
     _validate.non_negative(
@@ -443,22 +460,35 @@ class RandomAllocationSampling(BatchSelectionStrategy):
         iterations=self.iterations,
     )
     _validate.positive(cycle_length=self.cycle_length)
+    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
     num_cycles = math.ceil(self.iterations / self.cycle_length)
     if self.total_participations > num_cycles:
       raise ValueError(
           f'Expected total_participations={self.total_participations} <='
           f' ceil(iterations / cycle_length)={num_cycles}.'
       )
+    if self.iterations % self.cycle_length != 0:
+      logging.warning(
+          'iterations=%d is not a multiple of cycle_length=%d; set iterations '
+          'to a multiple of cycle_length for best utility.',
+          self.iterations,
+          self.cycle_length,
+      )
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = _get_dtype(num_examples)
 
-    partition = _independent_partition(
-        num_examples, self.cycle_length, rng, dtype
-    )
+    if self.partition_type == PartitionType.INDEPENDENT:
+      partition_fn = _independent_partition
+    elif self.partition_type == PartitionType.EQUAL_SPLIT:
+      partition_fn = _equal_split_partition
+    else:
+      raise ValueError(f'Unsupported partition type: {self.partition_type}')
+
+    partition = partition_fn(num_examples, self.cycle_length, rng, dtype)
     # If iterations is not a multiple of cycle_length, we pretend we are running
     # for ceil(iterations / cycle_length) * cycle_length iterations so that all
     # groups have the same number of eligible iterations, and then truncate to
@@ -479,7 +509,13 @@ class RandomAllocationSampling(BatchSelectionStrategy):
       # instead of O(n*k).
       probs = remaining[group_index] / eligible
       mask = rng.random(len(group)) < probs
-      yield group[mask]
+      if self.sampling_prob < 1.0:
+        kept = mask & (rng.random(len(group)) < self.sampling_prob)
+      else:
+        kept = mask
+      yield group[kept]
+      # Decrement remaining by the allocated mask, not the kept subset, so the
+      # conditional allocation probabilities remain exact under subsampling.
       remaining[group_index] -= mask
 
 
@@ -518,7 +554,7 @@ class FixedBatchSampling(BatchSelectionStrategy):
           'batch_size must be <= num_examples when replace is False.'
       )
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = _get_dtype(num_examples)
     for _ in range(self.iterations):
       yield rng.choice(
           num_examples,
@@ -584,7 +620,7 @@ class BMinSepSampling(BatchSelectionStrategy):
     p = self.sampling_prob
     b = self.min_sep
     rng = np.random.default_rng(rng)
-    dtype = np.min_scalar_type(-num_examples)
+    dtype = _get_dtype(num_examples)
     if self.warm_start and b > 1:
       size = rng.binomial(n=num_examples, p=(b - 1) * p / (1 + (b - 1) * p))
       concatenated_history = rng.choice(
@@ -690,7 +726,7 @@ class UserSelectionStrategy:
     unique, inverse = np.unique(user_ids, return_inverse=True)
     num_users = unique.size
     num_examples = user_ids.size
-    dtype = np.min_scalar_type(-max(num_examples, 1))
+    dtype = _get_dtype(num_examples)
 
     # Group example indices by user once to avoid an O(n) scan per user.
     order = np.argsort(inverse, kind='stable').astype(dtype, copy=False)

@@ -16,7 +16,7 @@ limitations under the License. -->
 
 If you have questions, feature requests or need some help, you can reach out to
 us at <jax-privacy-open-source@google.com>. Also, consider creating an
-[issue on GitHub](https://github.com/google-deepmind/jax_privacy/issues).
+[issue on GitHub](https://github.com/google-parfait/jax_privacy/issues).
 
 If your question is about Differential Privacy in general there are also related
 communities where there is a broader audience:

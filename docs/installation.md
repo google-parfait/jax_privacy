@@ -25,7 +25,7 @@ The repository is under active development, and installing from head ensures
 you get the most recent features and the best version of the library.
 
 ```bash
-pip install git+https://github.com/google-deepmind/jax_privacy
+pip install git+https://github.com/google-parfait/jax_privacy
 ```
 
 ### Dependency versions
@@ -57,7 +57,7 @@ contribute to the library.
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/google-deepmind/jax_privacy
+   git clone https://github.com/google-parfait/jax_privacy
    ```
 
 2. Install the package in editable mode so modifications to the code are

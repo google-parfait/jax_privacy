@@ -569,6 +569,11 @@ class CanaryScoreAuditor:
         self._in_canary_scores, self._out_canary_scores
     )
 
+  @property
+  def num_canaries(self) -> tuple[int, int]:
+    """Returns the ``(held_in, held_out)`` canary counts."""
+    return self._in_canary_scores.size, self._out_canary_scores.size
+
   def _get_tp_counts(self) -> np.ndarray:
     """Returns the true positive counts at each threshold."""
     # Reverse the order so they are increasing.

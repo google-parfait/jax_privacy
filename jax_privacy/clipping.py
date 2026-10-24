@@ -133,8 +133,10 @@ class BoundedSensitivityCallable:
         padding (``True``) vs. real data (``False``).  Padding examples are
         zeroed out after clipping but before summation, so they contribute
         exactly zero to the aggregated output and do not affect the formal
-        sensitivity guarantee.  When omitted, all examples are treated as real.
-        For a full guide, see `Using is_padding_example
+        sensitivity guarantee.  Floating-point leaves of per-example auxiliary
+        outputs and norms at padding positions are set to ``NaN``.  When
+        omitted, all examples are treated as real. For a full guide, see `Using
+        is_padding_example
         <https://jax-privacy.readthedocs.io/en/latest/sharp_edges_variable_batch_sizes.html#using-is-padding-example>`_.
       **kwargs: Forwards all keyword arguments to the underlying function.
 
@@ -305,6 +307,18 @@ def _maybe_zero(clipped, l2_norm, is_padding, nan_safe=True):
     )
     should_zero = should_zero | ~all_finite
   return jax.tree.map(lambda x: jnp.where(should_zero, 0, x), clipped)
+
+
+def _mask_padding(pytree: PyTree, is_padding_example: jax.Array) -> PyTree:
+  """Sets floating-point leaves at padding positions to NaN."""
+
+  def _mask_leaf(x: jax.Array) -> jax.Array:
+    if not jnp.issubdtype(jnp.asarray(x).dtype, jnp.floating):
+      return x
+    mask = jnp.expand_dims(is_padding_example, tuple(range(1, x.ndim)))
+    return jnp.where(mask, jnp.nan, x)
+
+  return jax.tree.map(_mask_leaf, pytree)
 
 
 def _adjusted_clip_norm(
@@ -692,6 +706,7 @@ def clipped_fun(
       # downstream (e.g. in Keras metrics). To fix this, we squeeze the axis 1
       # of aux outputs.
       aux = jax.tree.map(_maybe_squeeze_axis_1, aux)
+    aux, norms = _mask_padding((aux, norms), is_padding_example)
     if normalize_by != 1.0:
       clipped_values = jax.tree.map(lambda x: x / normalize_by, clipped_values)
 

@@ -29,27 +29,39 @@ Because it is designed to be framework and model-agnostic, there are a few
 things that are explicitly out of scope, like checkpointing and metrics logging.
 Callers are expected to implement these things themselves via dependency
 injection through the callback_fn option.
+
+Example Usage:
+
+  >>> def loss_fn(params, batch, prng):
+  ...   return jax.numpy.mean((params - batch) ** 2), {}
+  >>> cfg = BandMFConfig.default(1, 5, 5, noise_multiplier=0.0)
+  >>> trainer = DPTrainer(config=cfg, loss_fn=loss_fn, optimizer=optax.sgd(0.5))
+  >>> data, in_c, out_c = np.zeros((8, 2)), np.ones((4, 2)), -np.ones((4, 2))
+  >>> params0 = np.zeros(2)
+  >>> state0 = trainer.init(params0)
+  >>> state = trainer.fit(np.vstack([data, in_c]), state0, rng_or_seed=0)
+  >>> auditor = audit(loss_fn, state.params, in_c, out_c, params0)
+  >>> float(auditor.attack_auroc())
+  1.0
 """
 
-from collections.abc import Callable, Iterator
-import copy
+from collections.abc import Callable
 import dataclasses
 import functools
-import itertools
-from typing import Protocol, TypeAlias
-import zlib
+from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
-from jax.experimental import multihost_utils
 import jax_privacy
 from jax_privacy import _compilation
+from jax_privacy import _data_loading
 from jax_privacy import _validate
-from jax_privacy import batch_selection
+from jax_privacy import auditing
 from jax_privacy import execution_plan
 from jax_privacy import optimizers as aug_optimizers
 import numpy as np
 import optax
+from optax import microbatching
 
 # Re-export key symbols so users can access them via jax_privacy.training.
 BandMFConfig = execution_plan.BandMFConfig
@@ -61,7 +73,7 @@ Loss: TypeAlias = jax.Array
 Aux: TypeAlias = optax.ArrayTree
 PerExampleAux: TypeAlias = jax_privacy.clipping.AuxiliaryOutput
 Batch: TypeAlias = optax.ArrayTree
-Dataset: TypeAlias = optax.ArrayTree
+Dataset: TypeAlias = optax.ArrayTree | Any
 Params: TypeAlias = optax.ArrayTree
 OptState: TypeAlias = optax.ArrayTree
 NoiseState: TypeAlias = optax.ArrayTree
@@ -76,9 +88,8 @@ AutotuneMicrobatch = _compilation.AutotuneMicrobatch
 class LossFn(Protocol):
   """Expected contract for loss functions used in DP training.
 
-  Loss functions must accept ``params`` and a ``data`` batch, and return
-  ``(loss, aux)``.  They may optionally accept a PRNG key as a third
-  positional argument for stochastic operations (e.g., dropout).
+  Loss functions must accept ``params``, ``data``, and ``prng`` and return
+  ``(loss, aux)``.
 
   Any additional context the loss function needs — frozen parameters,
   model configuration, label smoothing constants, etc. — should be closed
@@ -126,61 +137,6 @@ class TrainingState:
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
 
 
-def _batch_iterator(  # pylint: disable=g-doc-args
-    dataset: Dataset,
-    strategy: batch_selection.BatchSelectionStrategy,
-    *,
-    rng: batch_selection.RngType = None,
-    pad_to_multiple_of: int = 1,
-    microbatch_size: int | None = None,
-    initial_step: int = 0,
-    sharding: jax.sharding.NamedSharding | None = None,
-) -> Iterator[tuple[Batch, jax.Array]]:
-  """Yields padded (batch, is_padding_example) pairs from dataset.
-
-  Formal Guarantees:
-    - Non-padding examples are sampled according to ``strategy.batch_iterator``,
-      starting from ``initial_step``.
-    - Padding positions (where ``indices == -1``) are zeroed out in ``batch``
-      (having no dependence on ``dataset``) and marked ``True`` in
-      ``is_padding_example``.
-  """
-  num_examples = _validate.batch(dataset)
-  if jax.process_count() > 1:
-    crcs = [
-        zlib.crc32(x[:1].tobytes()) % 2**31 for x in jax.tree.leaves(dataset)
-    ]
-    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
-    multihost_utils.assert_equal(
-        (seed, *crcs), "dataset and rng must match across all JAX processes"
-    )
-  index_iterator = strategy.batch_iterator(num_examples, rng=rng)
-
-  # When sharding across a mesh (including multi-controller JAX),
-  # make_array_from_callback slices and transfers only the process-addressable
-  # shards to HBM. In multi-controller setups, every process must hold the
-  # full dataset and use the same rng so each process samples the same global
-  # batch indices before slicing its local device shards.
-  def _to_device(x: np.ndarray) -> jax.Array:
-    if sharding is None:
-      return jax.device_put(x)
-    return jax.make_array_from_callback(x.shape, sharding, lambda idx: x[idx])
-
-  def _index_and_zero(x, indices):
-    mask = np.expand_dims(indices == -1, tuple(range(1, x.ndim)))
-    return _to_device(np.where(mask, 0, x[indices]))
-
-  # Fast-forward the index iterator to initial_step when resuming from a
-  # checkpoint, without materializing or transferring skipped batches.
-  # TODO: Investigate stateful iterator instead of rng replay.
-  for indices in itertools.islice(index_iterator, initial_step, None):
-    indices = batch_selection.pad_to_multiple_of(
-        indices, pad_to_multiple_of, microbatch_size=microbatch_size
-    )
-    fn = functools.partial(_index_and_zero, indices=indices)
-    yield jax.tree.map(fn, dataset), _to_device(indices == -1)
-
-
 # DPTrainer contains static configuration that defines the training step, but
 # not all fields are hashable (e.g., BandMFConfig contains an `array` field).
 # To get jax.jit to work, we use `eq=False` below to hash based on object ID.
@@ -219,6 +175,15 @@ class DPTrainer:
       :class:`~jax_privacy.training.AutotuneMicrobatch` picks the largest
       microbatch size that fits device memory and compiles once. See
       :class:`~jax_privacy.training.CompilationStrategy`.
+    padding_example: Optional single-example PyTree specification (arrays or
+      :class:`jax.ShapeDtypeStruct`) defining the structure, shapes, and dtypes
+      of zero-padded examples. If omitted on a ``grain.MapDataset``, it is
+      inferred from ``dataset[0]``, which requires a non-empty dataset with
+      fixed element shapes.
+    noise_seed: Optional seed for the random number generator used for noise
+      addition. If ``None``, a fresh random seed is drawn; pass an explicit seed
+      for multi-host coordination or reproducible tests (and keep it secret in
+      production deployments).
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -233,6 +198,8 @@ class DPTrainer:
   compilation_strategy: _compilation.CompilationStrategy = dataclasses.field(
       default_factory=_compilation.PadToMultiple
   )
+  padding_example: Any = None
+  noise_seed: int | None = None
 
   def __post_init__(self):
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
@@ -240,8 +207,9 @@ class DPTrainer:
   @functools.cached_property
   def plan(self) -> execution_plan.DPExecutionPlan:
     """``DPExecutionPlan`` built from ``config`` and ``performance_flags``."""
-    return self.config.make(self.performance_flags)
+    return self.config.make(self.performance_flags, noise_seed=self.noise_seed)
 
+  @jax.jit(static_argnames=["self"])
   def init(self, params: Params) -> TrainingState:
     """Initialize a ``TrainingState`` at step 0."""
     optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
@@ -314,13 +282,11 @@ class DPTrainer:
   def _precompile(
       self,
       dataset: Dataset,
-      state: Params | TrainingState,
+      state: TrainingState,
       *,
       rng_or_seed: np.random.Generator | int | None = None,
   ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
     """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
-    if not isinstance(state, TrainingState):
-      state = jax.eval_shape(self.init, state)
     return _compilation.precompile(
         self, dataset, state, rng_or_seed=rng_or_seed
     )
@@ -328,7 +294,7 @@ class DPTrainer:
   def fit(
       self,
       dataset: Dataset,
-      state: Params | TrainingState,
+      state: TrainingState,
       *,
       callback: CallbackFn | None = None,
       rng_or_seed: np.random.Generator | int | None = None,
@@ -337,12 +303,16 @@ class DPTrainer:
     """Runs an end-to-end differentially private training loop.
 
     Args:
-      dataset: The training dataset, as a PyTree of arrays where the first axis
-        of each leaf is the batch / example dimension.
-      state: Initial parameter PyTree or a resumable ``TrainingState``. If a
-        ``TrainingState`` is provided, training continues from the step recorded
-        in the state, and the batch selection iterator safely fast-forwards to
-        maintain deterministic DP properties.
+      dataset: The training dataset, either as a PyTree of arrays where the
+        first axis of each leaf is the batch / example dimension, or as a
+        ``grain.MapDataset`` (or ``grain.RandomAccessDataSource``) where each
+        element is a PyTree of arrays for a single example.
+      state: Initial or resumable ``TrainingState`` (e.g., from :meth:`init`).
+        Training starts or continues from ``state.step``, and the batch
+        selection iterator safely fast-forwards to maintain deterministic DP
+        properties. Note that ``state`` buffers are donated during training
+        (:meth:`train_step` uses ``donate_argnames=["state"]``), so copy any
+        arrays you need to retain after ``fit`` returns.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
@@ -359,6 +329,10 @@ class DPTrainer:
     Returns:
       Final ``TrainingState``.
     """
+    if (n := getattr(self.config, "num_examples", None)) is not None:
+      is_map = _data_loading.is_map_dataset(dataset)
+      m = len(dataset) if is_map else _validate.batch(dataset)
+      _validate.equal(n, num_examples=m)
     # Precompilation resolves the trainer and compiles the required train_steps.
     # It may return a *different* trainer (e.g. AutotuneMicrobatch picks a
     # concrete microbatch size), so the loop below runs on ``trainer`` rather
@@ -366,15 +340,15 @@ class DPTrainer:
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
 
-    # Clone state. train_step uses donate_argnames.
-    if not isinstance(state, TrainingState):
-      state = self.init(jax.tree.map(jax.numpy.copy, state))
-
-    if precompile or isinstance(self.compilation_strategy, AutotuneMicrobatch):
+    if (
+        precompile
+        or getattr(self.compilation_strategy, "multiple", None) is None
+    ):
       trainer, futures = self._precompile(
           dataset, state, rng_or_seed=rng_or_seed
       )
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
+    assert trainer.compilation_strategy.multiple is not None
     warn_on_cache_miss = bool(futures)
 
     # We need tight alignment between how rng is used here and in precompile().
@@ -383,9 +357,10 @@ class DPTrainer:
 
     with _compilation.hoist_closed_over_constants():
       axis = trainer.performance_flags.batch_axis_name
-      batches = _batch_iterator(
+      batches = _data_loading.batch_iterator(
           dataset,
           trainer.plan.batch_selection_strategy,
+          padding_example=trainer.padding_example,
           rng=rng,
           pad_to_multiple_of=trainer.compilation_strategy.multiple,
           microbatch_size=trainer.performance_flags.microbatch_size,
@@ -412,3 +387,67 @@ class DPTrainer:
           callback(step, state, aux)
 
     return state
+
+
+@jax.jit(static_argnames=["loss_fn", "microbatch_size"])
+def _score_canaries(
+    loss_fn: LossFn,
+    trained: Params,
+    canaries: Batch,
+    untrained: Params | None = None,
+    *,
+    microbatch_size: int | None = None,
+    prng_key: jax.Array,
+) -> jax.Array:
+  """Computes per-canary loss reductions ``loss(untrained) - loss(trained)``."""
+  n = _validate.batch(canaries)
+  mb = microbatch_size or 1
+  idx = jax_privacy.batch_selection.pad_to_multiple_of(np.arange(n), mb)
+
+  def score_one(x, key):
+    b = jax.tree.map(lambda a: a[None], x)
+    # Reuse key across both evaluations to cancel stochastic loss variance.
+    l0 = 0.0 if untrained is None else loss_fn(untrained, b, key)[0]
+    return l0 - loss_fn(trained, b, key)[0]
+
+  vmap_fn = microbatching.micro_vmap(score_one, (0, 0), microbatch_size=mb)
+  padded = jax.tree.map(lambda x: x[idx], canaries)
+  keys = jax.random.split(prng_key, idx.size)
+  return vmap_fn(padded, keys)[:n]
+
+
+def audit(
+    loss_fn: LossFn,
+    trained: Params,
+    in_canaries: Batch,
+    out_canaries: Batch,
+    untrained: Params | None = None,
+    *,
+    microbatch_size: int | None = None,
+    prng_key: jax.Array | int = 0,
+) -> auditing.CanaryScoreAuditor:
+  """Scores held-in and held-out canaries and returns an auditor.
+
+  Args:
+    loss_fn: Per-example loss function matching :class:`LossFn`.
+    trained: Trained model parameters.
+    in_canaries: Held-in canary batch included in the training dataset.
+    out_canaries: Held-out canary batch excluded from the training dataset.
+    untrained: Optional untrained model parameters used to center canary scores
+      as ``loss(untrained) - loss(trained)``. If ``None``, scores are
+      ``-loss(trained)``.
+    microbatch_size: Optional microbatch size for evaluating ``loss_fn``.
+    prng_key: Random seed or PRNG key for loss_fn evaluation.
+
+  Returns:
+    A :class:`~jax_privacy.auditing.CanaryScoreAuditor` initialized with the
+    held-in and held-out canary scores.
+  """
+  if isinstance(prng_key, int):
+    prng_key = jax.random.key(prng_key)
+  in_key, out_key = jax.random.split(prng_key)
+  args = (loss_fn, trained)
+  kw = dict(untrained=untrained, microbatch_size=microbatch_size)
+  in_scores = _score_canaries(*args, in_canaries, prng_key=in_key, **kw)
+  out_scores = _score_canaries(*args, out_canaries, prng_key=out_key, **kw)
+  return auditing.CanaryScoreAuditor(in_scores, out_scores)

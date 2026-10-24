@@ -14,7 +14,11 @@
 
 """Centralized validation utilities for jax_privacy."""
 
+import copy
+import zlib
+
 import jax
+from jax.experimental import multihost_utils
 import jax.numpy as jnp
 import numpy as np
 
@@ -37,11 +41,29 @@ def positive(**kwargs):
       raise ValueError(f'Expected {name}={value} > 0.')
 
 
-def in_range(lo, hi, **kwargs):
-  """Validates that all values are in [lo, hi]."""
+def in_range(lo, hi, closed='both', **kwargs):
+  """Validates that all values are in the interval from lo to hi.
+
+  Args:
+    lo: The lower endpoint of the interval.
+    hi: The upper endpoint of the interval.
+    closed: Which endpoints are included: ``'both'`` for ``[lo, hi]``,
+      ``'left'`` for ``[lo, hi)``, ``'right'`` for ``(lo, hi]``, or
+      ``'neither'`` for ``(lo, hi)``.
+    **kwargs: The named values to validate.
+  """
+  if closed not in ('both', 'left', 'right', 'neither'):
+    raise ValueError(f'Unknown closed={closed!r}.')
+  lo_closed = closed in ('both', 'left')
+  hi_closed = closed in ('both', 'right')
   for name, value in kwargs.items():
-    if not lo <= value <= hi:
-      raise ValueError(f'Expected {name}={value} in [{lo}, {hi}].')
+    lo_ok = lo <= value if lo_closed else lo < value
+    hi_ok = value <= hi if hi_closed else value < hi
+    if not (lo_ok and hi_ok):
+      interval = (
+          f"{'[' if lo_closed else '('}{lo}, {hi}{']' if hi_closed else ')'}"
+      )
+      raise ValueError(f'Expected {name}={value} in {interval}.')
 
 
 def equal(expected, **kwargs):
@@ -78,21 +100,26 @@ def is_none(context: str = '', **kwargs):
       raise ValueError(f'Expected {name}={value} to be None. {context}')
 
 
-def batch(pytree) -> int:
+def batch(pytree, padding_example=None) -> int:
   """Validates a batch pytree and returns the batch size.
 
   Checks that the pytree has at least one leaf, all leaves are arrays with
   at least one dimension, and all leaves have the same size along axis 0.
+  If ``padding_example`` is provided, also checks that ``pytree`` matches its
+  PyTree structure, per-example shapes, and dtypes.
 
   Args:
     pytree: A pytree of arrays representing a batch of data.
+    padding_example: Optional single-example PyTree specification to validate
+      against.
 
   Returns:
     The batch size (size of the first dimension).
 
   Raises:
     ValueError: If the pytree is empty, contains non-array leaves, leaves
-      with zero dimensions, or leaves with inconsistent first-axis sizes.
+      with zero dimensions, leaves with inconsistent first-axis sizes, or
+      does not match ``padding_example``.
   """
   leaves = jax.tree.leaves(pytree)
   if not leaves:
@@ -114,7 +141,25 @@ def batch(pytree) -> int:
         'All batch leaves must have the same size along axis 0, '
         f'got sizes: {sorted(sizes)}.'
     )
+  if padding_example is not None:
+    tree_structure(padding_example, dataset=pytree)
+    data_meta = [(x.shape[1:], x.dtype) for x in leaves]
+    pad_meta = [(x.shape, x.dtype) for x in jax.tree.leaves(padding_example)]
+    equal(pad_meta, dataset_shape_dtype=data_meta)
   return sizes.pop()
+
+
+def multihost(first_example, rng):
+  """Validates that the dataset and RNG match across all JAX processes."""
+  if jax.process_count() > 1:
+    to_bytes = lambda x: getattr(x, 'tobytes', lambda: str(x).encode())()
+    crcs = [
+        zlib.crc32(to_bytes(x)) % 2**31 for x in jax.tree.leaves(first_example)
+    ]
+    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
+    multihost_utils.assert_equal(
+        (seed, *crcs), 'dataset and rng must match across all JAX processes'
+    )
 
 
 def strategy(value, max_size):

@@ -59,6 +59,7 @@ import functools
 import math
 from typing import Callable, Protocol
 
+from absl import logging
 import dp_accounting
 import jax
 import numpy as np
@@ -107,7 +108,9 @@ class PerformanceFlags:
 
   Attributes:
     dtype: The dtype to use for noise generation and gradient aggregation.
-    noise_seed: A seed for the random number generator used for noise addition.
+    noise_seed: Deprecated; pass ``noise_seed`` to
+      :meth:`~jax_privacy.execution_plan.ExecutionPlanConfig.make` or
+      :class:`~jax_privacy.training.DPTrainer` instead.
     intermediate_strategy: Strategy for generating intermediate noise, controls
       sharding behavior for noise addition.
     microbatch_size: If set, per-example gradient computation is broken into
@@ -124,9 +127,10 @@ class PerformanceFlags:
   """
 
   dtype: jax.typing.DTypeLike = np.float32
+  # Deprecated; pass noise_seed to config.make() or DPTrainer instead.
   noise_seed: int | None = None
-  intermediate_strategy: noise_addition.SupportedStrategies = (
-      noise_addition.SupportedStrategies.DEFAULT
+  intermediate_strategy: noise_addition.ShardingStrategies = (
+      noise_addition.ShardingStrategies.DEFAULT
   )
   microbatch_size: int | None = None
   batch_axis_name: str | tuple[str, ...] | None = None
@@ -136,6 +140,8 @@ class PerformanceFlags:
   param_specs: sharding_utils.PartitionSpecPyTree | None = None
 
   def __post_init__(self):
+    if self.noise_seed is not None:
+      logging.warning('PerformanceFlags.noise_seed is deprecated.')
     if self.spmd_axis_name is not None:
       if self.batch_axis_name is not None:
         raise ValueError('Cannot set both batch_axis_name and spmd_axis_name.')
@@ -215,9 +221,19 @@ class ExecutionPlanConfig(Protocol):
   """
 
   def make(
-      self, performance_flags: PerformanceFlags | None = None
+      self,
+      performance_flags: PerformanceFlags | None = None,
+      noise_seed: int | None = None,
   ) -> DPExecutionPlan:
-    """Returns a ``DPExecutionPlan`` configured with ``performance_flags``."""
+    """Returns a ``DPExecutionPlan`` configured with ``performance_flags``.
+
+    Args:
+      performance_flags: Optional performance flags controlling implementation
+        details such as ``dtype``, sharding, and microbatching.
+      noise_seed: Optional seed for the noise-addition RNG. If ``None``, a fresh
+        random seed is drawn; pass an explicit seed for multi-host coordination
+        or reproducible tests (and keep it secret in production deployments).
+    """
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -523,6 +539,7 @@ class BandMFConfig:
   def make(
       self,
       performance_flags: PerformanceFlags | None = None,
+      noise_seed: int | None = None,
   ) -> DPExecutionPlan:
     """Returns a DP execution plan for the given BandMF mechanism config.
 
@@ -530,6 +547,10 @@ class BandMFConfig:
       performance_flags: Optional performance flags that control implementation
         details such as ``dtype``, ``sharding``, and ``microbatching``. If
         ``None``, default values are used for all performance flags.
+      noise_seed: Optional seed for the random number generator used for noise
+        addition. If ``None``, a fresh random seed is drawn; pass an explicit
+        seed for multi-host coordination or reproducible tests (and keep it
+        secret in production deployments).
 
     Returns:
       A DPExecutionPlan configured from this config and the given performance
@@ -541,6 +562,8 @@ class BandMFConfig:
     self._check_calibrated()
     if performance_flags is None:
       performance_flags = PerformanceFlags()
+    if noise_seed is None:
+      noise_seed = performance_flags.noise_seed
 
     @functools.wraps(clipping.clipped_grad)
     def clipped_grad_transform(*args, **kwargs):
@@ -593,7 +616,7 @@ class BandMFConfig:
         stddev=float(
             self.noise_multiplier * query_sensitivity * max_column_norm
         ),
-        prng_key=performance_flags.noise_seed,
+        prng_key=noise_seed,
         dtype=performance_flags.dtype,
         intermediate_strategy=performance_flags.intermediate_strategy,
     )
@@ -629,8 +652,10 @@ class NonPrivateConfig:
   def make(
       self,
       performance_flags: PerformanceFlags | None = None,
+      noise_seed: int | None = None,
   ) -> DPExecutionPlan:
     """Returns a DPExecutionPlan configured for non-private training."""
+    del noise_seed
     if performance_flags is None:
       performance_flags = PerformanceFlags()
 

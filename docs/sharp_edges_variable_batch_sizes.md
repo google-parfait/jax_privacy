@@ -127,7 +127,9 @@ real example. Examples marked as padding are zeroed out after clipping
 but before summation, so they contribute exactly zero to the aggregated
 output. This preserves the formal DP sensitivity guarantee: the L2
 sensitivity remains the same regardless of how many padding examples are in
-the batch.
+the batch. Floating-point leaves of per-example auxiliary outputs (`aux`,
+`norms`, `values`, `grad_norms`) at padding positions are set to `NaN` so they
+can be aggregated (for example, via `jnp.nanmean`) without bias from padding.
 
 When `is_padding_example` is omitted (the default), all examples are
 treated as real.
@@ -144,7 +146,7 @@ is_padding_example = (indices == -1)
 
 This convention is used consistently by
 {func}`~jax_privacy.batch_selection.pad_to_multiple_of`,
-`training._batch_iterator`, and all reference examples.
+`_data_loading.batch_iterator`, and all reference examples.
 
 When using the indices returned by `pad_to_multiple_of` to form a batch,
 padding with `-1` generally means the *last* example in the training dataset
