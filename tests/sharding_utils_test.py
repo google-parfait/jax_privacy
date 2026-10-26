@@ -169,6 +169,29 @@ class RandomTest(parameterized.TestCase):
     np.testing.assert_allclose(mean, 0.0, atol=0.02)
     np.testing.assert_allclose(std, 1.0, atol=0.02)
 
+  @parameterized.product(num_devices=(1, 2, 8), shape=((0,), (16,)))
+  def test_sampling_single_device_and_empty_arrays(self, num_devices, shape):
+    mesh = jax.make_mesh(
+        (num_devices,),
+        ('data',),
+        devices=jax.devices()[:num_devices],
+        axis_types=(jax.sharding.AxisType.Explicit,),
+    )
+    sharding = jax.sharding.NamedSharding(mesh, jax.P('data'))
+    struct = {
+        'value': jax.ShapeDtypeStruct(shape, jnp.float32, sharding=sharding)
+    }
+
+    with jax.set_mesh(mesh):
+      output = sharding_utils.parallel_sample_pytree(
+          np.random.default_rng(42), struct
+      )['value']
+
+    self.assertEqual(output.shape, shape)
+    self.assertEqual(output.dtype, jnp.float32)
+    self.assertTrue(output.sharding.is_equivalent_to(sharding, len(shape)))
+    self.assertTrue(np.isfinite(output).all())
+
   def test_pytree_structures(self):
     rng = np.random.default_rng(42)
     sharding_a = jax.sharding.NamedSharding(

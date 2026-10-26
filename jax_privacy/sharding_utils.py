@@ -273,7 +273,8 @@ def _parallel_sample(
   rngs = rng.spawn(num_devices)
 
   def local_fn(s):
-    i = s[0].start // (s[0].stop - s[0].start)
+    start, _, _ = s[0].indices(size)
+    i = start // per_device_size if per_device_size else 0
     return sampler(rngs[i], size=per_device_size, dtype=dtype)
 
   fully_sharded_result = jax.make_array_from_callback(
