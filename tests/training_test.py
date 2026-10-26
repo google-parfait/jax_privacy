@@ -313,20 +313,34 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
 
-  @parameterized.named_parameters(*_DATASET_TYPES)
-  def test_resume_from_state_yields_identical_results(self, to_dataset):
+  @parameterized.product(
+      to_dataset=[fn for _, fn in _DATASET_TYPES],
+      compress=[False, True],
+  )
+  def test_resume_from_state_yields_identical_results(
+      self, to_dataset, compress
+  ):
     """Test that resuming from intermediate steps works as intended."""
-    params = jnp.array([5.0, 5.0])
+    params = jnp.array([5.0, 5.0], dtype=jnp.bfloat16)
     dataset = to_dataset(
         np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]])
     )
-
-    trainer = training.DPTrainer(
-        config=_make_config(5, noise_multiplier=0.1, expected_participations=1),
-        loss_fn=_quadratic_loss,
-        optimizer=optax.sgd(0.01),
+    config = execution_plan.BandMFConfig.default(
+        num_bands=3,
+        iterations=5,
+        noise_multiplier=0.1,
+        expected_participations=1,
     )
 
+    def make_trainer():
+      return training.DPTrainer(
+          config=config,
+          loss_fn=_quadratic_loss,
+          optimizer=optax.sgd(0.01),
+          noise_seed=7 if compress else None,
+      )
+
+    trainer = make_trainer()
     intermediate_states = []
 
     def callback(step, state, _):
@@ -338,11 +352,34 @@ class DPTrainerTest(parameterized.TestCase):
     )
 
     for state in intermediate_states:
-      final_state_resumed = trainer.fit(dataset, state, rng_or_seed=42)
+      resumed_trainer = make_trainer() if compress else trainer
+      if compress:
+        compressed = state.compress()
+        self.assertIsNone(compressed.noise_state)
+        state = compressed.restore(resumed_trainer)
+      final_state_resumed = resumed_trainer.fit(dataset, state, rng_or_seed=42)
       np.testing.assert_allclose(
           final_state_resumed.params, expected_final_state.params
       )
       self.assertEqual(final_state_resumed.step, expected_final_state.step)
+
+  def test_compress_and_restore_validation(self):
+    """Tests noise_seed validation, unrestored fit error, and idempotence."""
+    params = jnp.array([5.0, 5.0])
+    dataset = np.array([[1.0, 2.0], [3.0, 4.0]])
+    trainer = training.DPTrainer(
+        config=_make_config(3),
+        loss_fn=_quadratic_loss,
+        optimizer=optax.sgd(1.0),
+    )
+    state0 = trainer.init(params)
+    compressed = state0.compress()
+    self.assertIsNone(compressed.noise_state)
+    with self.assertRaisesRegex(ValueError, 'noise_seed'):
+      compressed.restore(trainer)
+    with self.assertRaisesRegex(ValueError, 'Compressed state'):
+      trainer.fit(dataset, compressed, rng_or_seed=0)
+    self.assertIs(state0.restore(trainer), state0)
 
   def test_map_dataset_pytree_structure(self):
     """Train loop works with a Grain MapDataset yielding PyTrees."""
