@@ -42,12 +42,21 @@ supported, since the mixture modes must be enumerable.
 
 import dataclasses
 
+import dp_accounting
 import numpy as np
 import scipy as sp
 
 from ... import _validate
 from ... import batch_selection
 from . import sample_generation
+
+
+def _validate_balls_in_bins(strategy) -> None:
+  if not isinstance(strategy, batch_selection.BallsInBinsSampling):
+    raise ValueError(
+        'Importance sampling is only supported for balls-in-bins sampling, got'
+        f' {type(strategy)}.'
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -149,14 +158,52 @@ def compute_kappa(
     :math:`\kappa = \max_i \|c_i\|_2^2 / \sigma^2` over the modes :math:`c_i`
     of the positive distribution in the dominating pair.
   """
-  if not isinstance(strategy, batch_selection.BallsInBinsSampling):
-    raise ValueError(
-        'Importance sampling is only supported for balls-in-bins sampling, got'
-        f' {type(strategy)}.'
-    )
+  _validate_balls_in_bins(strategy)
   _validate.positive(noise_multiplier=noise_multiplier)
   modes = sample_generation.balls_in_bins_modes(strategy, c_col)
   return np.max(np.sum(modes**2, axis=0)) / noise_multiplier**2
+
+
+def reverse_divergence_bound(
+    strategy: batch_selection.BallsInBinsSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    epsilon: float,
+) -> float:
+  """Upper bound on the reverse hockey-stick divergence, without sampling.
+
+  Monte Carlo accounting must estimate the hockey-stick divergence in both
+  directions of the dominating pair. The reverse direction is typically far
+  smaller than the forward one, and this bound is often enough to show it meets
+  the target delta, in which case only the forward direction needs sampling.
+  The bound is exact for a single mode and informative when
+  :func:`compute_kappa` is below roughly ``2 * epsilon``, the same regime in
+  which importance sampling is worthwhile.
+
+  Args:
+    strategy: The balls-in-bins sampling strategy.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of ``c_col``.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+    epsilon: The epsilon of the hockey-stick divergence.
+
+  Returns:
+    An upper bound on the reverse hockey-stick divergence, or the trivial bound
+    1 when it is uninformative.
+  """
+  _validate_balls_in_bins(strategy)
+  _validate.positive(noise_multiplier=noise_multiplier)
+  modes = sample_generation.balls_in_bins_modes(strategy, c_col)
+  sensitivity = np.linalg.norm(modes.mean(axis=1))
+  # Half the mean squared distance of the modes from their mean, in noise units.
+  shift = (np.mean(np.sum(modes**2, axis=0)) - sensitivity**2) / (
+      2 * noise_multiplier**2
+  )
+  if epsilon <= shift:
+    return 1.0
+  sigma = noise_multiplier / sensitivity if sensitivity > 0 else np.inf
+  return float(dp_accounting.get_delta_gaussian(epsilon - shift, sigma))
 
 
 def get_importance_sampled_privacy_loss(

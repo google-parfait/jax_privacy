@@ -16,6 +16,7 @@ import math
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import dp_accounting
 from jax_privacy import batch_selection
 from jax_privacy.experimental.monte_carlo import delta_calculation
 from jax_privacy.experimental.monte_carlo import importance_sampling
@@ -129,6 +130,80 @@ class KappaTest(absltest.TestCase):
     )
     with self.assertRaisesRegex(ValueError, "only supported for balls-in-bins"):
       importance_sampling.compute_kappa(strategy, _NOISE_MULTIPLIER, _C_COL)
+
+
+class ReverseDivergenceBoundTest(parameterized.TestCase):
+
+  def test_is_exact_for_single_mode(self):
+    strategy = batch_selection.BallsInBinsSampling(cycle_length=1, iterations=4)
+    (mode,) = sample_generation.balls_in_bins_modes(strategy, _C_COL).T
+    epsilon = 1.0
+    expected = dp_accounting.get_delta_gaussian(
+        epsilon, _NOISE_MULTIPLIER / np.linalg.norm(mode)
+    )
+    self.assertAlmostEqual(
+        importance_sampling.reverse_divergence_bound(
+            strategy, _NOISE_MULTIPLIER, _C_COL, epsilon
+        ),
+        expected,
+    )
+
+  def test_is_decreasing_in_noise(self):
+    by_noise = [
+        importance_sampling.reverse_divergence_bound(
+            _STRATEGY, noise_multiplier, _C_COL, epsilon=1.0
+        )
+        for noise_multiplier in np.logspace(-1, 1, 20, base=2)
+    ]
+    self.assertTrue(np.all(np.diff(by_noise) < 0))
+
+  def test_is_decreasing_in_epsilon(self):
+    by_epsilon = [
+        importance_sampling.reverse_divergence_bound(
+            _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon
+        )
+        for epsilon in np.logspace(-1, 5, 20, base=2)
+    ]
+    self.assertTrue(np.all(np.diff(by_epsilon) < 0))
+
+  def test_is_trivial_when_epsilon_below_shift(self):
+    # For _STRATEGY the shift is (2.375 - 1.9375) / 2 = 0.21875.
+    self.assertEqual(
+        importance_sampling.reverse_divergence_bound(
+            _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon=0.2
+        ),
+        1.0,
+    )
+
+  @parameterized.named_parameters(
+      ("low_noise", 0.5, 1.0), ("unit_noise", 1.0, 1.0), ("large_eps", 1.0, 3.0)
+  )
+  def test_upper_bounds_monte_carlo_estimate(self, noise_multiplier, epsilon):
+    num_samples = 200_000
+    privacy_loss, _ = sample_generation.get_privacy_loss_sample(
+        _STRATEGY,
+        noise_multiplier,
+        _C_COL,
+        seed=0xFACADE,
+        positive_sample=False,
+        num_samples=num_samples,
+    )
+    estimands = _hockey_stick_estimands(epsilon, privacy_loss)
+    standard_error = estimands.std() / np.sqrt(num_samples)
+    bound = importance_sampling.reverse_divergence_bound(
+        _STRATEGY, noise_multiplier, _C_COL, epsilon
+    )
+    self.assertLess(bound, 1.0)
+    self.assertLessEqual(estimands.mean(), bound + 4 * standard_error)
+
+  def test_rejects_other_strategies(self):
+    strategy = batch_selection.CyclicPoissonSampling(
+        sampling_prob=0.5, iterations=4, cycle_length=2
+    )
+    with self.assertRaisesRegex(ValueError, "only supported for balls-in-bins"):
+      importance_sampling.reverse_divergence_bound(
+          strategy, _NOISE_MULTIPLIER, _C_COL, epsilon=1.0
+      )
 
 
 class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
