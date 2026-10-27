@@ -1201,6 +1201,41 @@ class DPTrainerCanaryAuditTest(parameterized.TestCase):
     expected_auroc = 0.5 if identical_canaries else 1.0
     self.assertAlmostEqual(float(auditor.attack_auroc()), expected_auroc)
 
+  def test_audit_hoists_closed_over_constants(self):
+    mesh = jax.sharding.Mesh(
+        np.array(jax.devices()[:1]).reshape((1, 1)), ('replica', 'model')
+    )
+    sharding = jax.sharding.NamedSharding(
+        mesh, jax.sharding.PartitionSpec('model')
+    )
+    held_in = np.full((4, 2), 2.0, dtype=np.float32)
+
+    with jax.set_mesh(mesh):
+      frozen = jax.device_put(jnp.full((8, 2), 12345.0), sharding)
+      untrained = jax.device_put(jnp.zeros((2,)), sharding)
+      trained = jax.device_put(jnp.full((2,), 2.0), sharding)
+
+      def loss_fn(params, batch, prng):
+        del prng
+        base = jnp.mean(frozen, axis=0) - 12345.0
+        loss = jnp.mean((params + base - batch) ** 2)
+        return loss, {'loss': loss}
+
+      kw = dict(microbatch_size=2, prng_key=jax.random.key(0))
+      with _compilation.hoist_closed_over_constants():
+        lowered = training._score_canaries.lower(
+            loss_fn, trained, held_in, untrained, **kw
+        )
+      self.assertNotIn('12345', lowered.as_text())
+
+      hoist = _compilation.hoist_closed_over_constants
+      with mock.patch.object(_compilation, hoist.__name__, wraps=hoist) as spy:
+        auditor = training.audit(
+            loss_fn, trained, held_in, -held_in, untrained, microbatch_size=2
+        )
+      spy.assert_called_once()
+      self.assertAlmostEqual(float(auditor.attack_auroc()), 1.0)
+
 
 if __name__ == '__main__':
   absltest.main()

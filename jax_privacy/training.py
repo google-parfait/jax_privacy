@@ -448,6 +448,7 @@ def audit(
   in_key, out_key = jax.random.split(prng_key)
   args = (loss_fn, trained)
   kw = dict(untrained=untrained, microbatch_size=microbatch_size)
-  in_scores = _score_canaries(*args, in_canaries, prng_key=in_key, **kw)
-  out_scores = _score_canaries(*args, out_canaries, prng_key=out_key, **kw)
+  with _compilation.hoist_closed_over_constants():
+    in_scores = _score_canaries(*args, in_canaries, prng_key=in_key, **kw)
+    out_scores = _score_canaries(*args, out_canaries, prng_key=out_key, **kw)
   return auditing.CanaryScoreAuditor(in_scores, out_scores)
