@@ -58,6 +58,7 @@
    history
    paper_reproductions
    batch_selection
+   matrix_factorization
    troubleshooting
    library_design
    contribution_guide
