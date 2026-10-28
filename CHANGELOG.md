@@ -71,6 +71,17 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
     correctly synchronizing the data stream.
+-   **[`keras_api`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.keras_api.html)
+    budget with gradient accumulation**: `fit()` now counts optimizer updates
+    from the global micro-batch count, since Keras carries leftover
+    accumulation across epochs and `fit()` calls. A repeated `fit()` compared
+    micro-batches already run against `train_steps` (optimizer updates), and
+    rounding per epoch undercounted updates when an epoch's micro-batches
+    were not a multiple of `gradient_accumulation_steps`. The Gemma Keras
+    examples now set
+    `train_steps = (epochs * (train_size // batch_size)) // gradient_accumulation_steps`.
+    ([#234](https://github.com/google-parfait/jax_privacy/issues/234),
+    [#288](https://github.com/google-parfait/jax_privacy/issues/288))
 -   **[`clipped_fun`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.html)
     Formal Guarantees**: Replaced the incorrect claim that sensitivity is
     always `1.0` / `l2_clip_norm` with guidance to use `.sensitivity()` /
