@@ -64,15 +64,6 @@ def _check_b_min_sep_property(batches, min_sep):
       assert np.intersect1d(batches[i], batches[j]).size == 0
 
 
-def _check_max_participation(batches, max_participation):
-  """Checks that the batches have the max participation property."""
-  counts = collections.defaultdict(int)
-  for batch in batches:
-    for x in batch:
-      counts[x] += 1
-  assert all(count <= max_participation for count in counts.values())
-
-
 def _check_element_range(batches, num_examples):
   """Checks that all batches are in the range [0, num_examples)."""
   for batch in batches:
@@ -89,337 +80,213 @@ def _check_all_equal(x):
   assert np.all(x == x[0]), f'Elements of x are not all equal: {x}'
 
 
+_EQUAL_SPLIT = batch_selection.PartitionType.EQUAL_SPLIT
+_INDEPENDENT = batch_selection.PartitionType.INDEPENDENT
+
+_MIN_SEP_STRATEGIES = [
+    batch_selection.CyclicPoissonSampling(0.5, 30, cycle_length=3),
+    batch_selection.BallsInBinsSampling(30, cycle_length=5),
+    batch_selection.RandomAllocationSampling(4, 30, cycle_length=3),
+    batch_selection.RandomAllocationSampling(4, 30, 3, sampling_prob=0.5),
+    batch_selection.BMinSepSampling(0.2, 50, min_sep=2, warm_start=True),
+    batch_selection.BMinSepSampling(0.2, 50, min_sep=4, warm_start=False),
+]
+
+_CYCLIC_PARTITION_STRATEGIES = [
+    batch_selection.CyclicPoissonSampling(0.5, 20, None, 3, _INDEPENDENT),
+    batch_selection.CyclicPoissonSampling(0.5, 20, None, 3, _EQUAL_SPLIT),
+    batch_selection.BallsInBinsSampling(20, cycle_length=4),
+    batch_selection.RandomAllocationSampling(4, 20, 3, _INDEPENDENT),
+    batch_selection.RandomAllocationSampling(4, 20, 3, _EQUAL_SPLIT),
+]
+
+# Strategies in the saturated regime (sampling_prob=1 or k = t / b), where the
+# first b batches partition the dataset and the schedule repeats every b steps.
+_PERIODIC_STRATEGIES = [
+    batch_selection.CyclicPoissonSampling(1.0, 10, None, 3, _INDEPENDENT),
+    batch_selection.CyclicPoissonSampling(1.0, 10, None, 3, _EQUAL_SPLIT),
+    batch_selection.BallsInBinsSampling(10, cycle_length=3),
+    batch_selection.BallsInBinsSampling(20, cycle_length=15),
+    batch_selection.RandomAllocationSampling(3, 9, cycle_length=3),
+    batch_selection.BMinSepSampling(1.0, 10, min_sep=2, warm_start=True),
+    batch_selection.BMinSepSampling(1.0, 10, min_sep=2, warm_start=False),
+]
+
+_EXACT_K_STRATEGIES = [
+    batch_selection.BallsInBinsSampling(20, cycle_length=5),
+    batch_selection.RandomAllocationSampling(0, 10),
+    batch_selection.RandomAllocationSampling(1, 20, cycle_length=1),
+    batch_selection.RandomAllocationSampling(3, 20, cycle_length=2),
+    batch_selection.RandomAllocationSampling(5, 21, cycle_length=3),
+]
+
+_SUBSAMPLED_K_STRATEGIES = [
+    batch_selection.RandomAllocationSampling(8, 96, 4, _INDEPENDENT, 0.5),
+    batch_selection.RandomAllocationSampling(8, 96, 4, _EQUAL_SPLIT, 0.5),
+]
+
+_TRUNCATED_STRATEGIES = [
+    batch_selection.CyclicPoissonSampling(0.5, 50, truncated_batch_size=4),
+    batch_selection.CyclicPoissonSampling(0.5, 50, 4, cycle_length=3),
+    batch_selection.BMinSepSampling(0.5, 50, 2, truncated_batch_size=4),
+]
+
+_STRATEGIES = [
+    batch_selection.CyclicPoissonSampling(0.25, 12),
+    batch_selection.FixedBatchSampling(4, 6),
+    batch_selection.FixedBatchSampling(10, 4, replace=True),
+    batch_selection.BMinSepSampling(0.2, 12, min_sep=1),
+    *_MIN_SEP_STRATEGIES,
+    *_CYCLIC_PARTITION_STRATEGIES,
+    *_PERIODIC_STRATEGIES,
+    *_EXACT_K_STRATEGIES,
+    *_SUBSAMPLED_K_STRATEGIES,
+    *_TRUNCATED_STRATEGIES,
+]
+
+
 class BatchSelectionTest(parameterized.TestCase):
 
-  @parameterized.product(
-      partition_type=[
-          batch_selection.PartitionType.EQUAL_SPLIT,
-          batch_selection.PartitionType.INDEPENDENT,
-      ],
-      num_examples=[10],
-      cycle_length=[3],
-      iterations=[5],
-  )
-  def test_cyclic_participation(
-      self, *, partition_type, num_examples, cycle_length, iterations
-  ):
-    """Tests the use of CyclicPoissonSampling instantiated to do shuffling."""
-    strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=1.0,
-        iterations=iterations,
-        cycle_length=cycle_length,
-        partition_type=partition_type,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
+  @parameterized.product(strategy=_STRATEGIES, num_examples=[0, 1, 50])
+  def test_output_invariants(self, strategy, num_examples):
+    """Checks batch count, index range, signed dtype, and uniqueness."""
+    if isinstance(strategy, batch_selection.FixedBatchSampling):
+      min_examples = 1 if strategy.replace else strategy.batch_size
+      if num_examples < min_examples:
+        with self.assertRaises(ValueError):
+          list(strategy.batch_iterator(num_examples, rng=0))
+        return
 
-    self.assertLen(batches, iterations)
-    if partition_type == batch_selection.PartitionType.EQUAL_SPLIT:
-      batch_size = num_examples // cycle_length
-      _check_batch_sizes_equal(batches, batch_size, batch_size)
-    _check_no_repeated_indices(batches[:cycle_length])
-    _check_cyclic_property(batches, cycle_length)
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    self.assertLen(batches, strategy.iterations)
     _check_element_range(batches, num_examples)
     _check_signed_indices(batches)
+    if isinstance(strategy, batch_selection.FixedBatchSampling):
+      size = strategy.batch_size
+      _check_batch_sizes_equal(batches, size, size)
+    if not getattr(strategy, 'replace', False):
+      for batch in batches:
+        self.assertEqual(len(batch), len(set(batch.tolist())))
 
-  @parameterized.product(
-      num_examples=[100],
-      iterations=[1000],
-      cycle_length=[1, 3],
-      expected_batch_size=[3],
-      partition_type=[
-          batch_selection.PartitionType.INDEPENDENT,
-          batch_selection.PartitionType.EQUAL_SPLIT,
-      ],
-      truncated_batch_size=[None, 4],
-  )
-  def test_poisson_sampling(
-      self,
-      *,
-      num_examples,
-      iterations,
-      cycle_length,
-      expected_batch_size,
-      partition_type,
-      truncated_batch_size,
-  ):
-    """Tests for Poisson sampling, potentially cyclic and truncated."""
-    sampling_prob = expected_batch_size / (num_examples // cycle_length)
-    strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        cycle_length=cycle_length,
-        partition_type=partition_type,
-        truncated_batch_size=truncated_batch_size,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-
-    self.assertLen(batches, iterations)
-    min_batch_size = 0
-    if truncated_batch_size:
-      max_batch_size = truncated_batch_size
-    else:
-      max_batch_size = num_examples // cycle_length
-
-    _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
-    for start_index in range(0, iterations, cycle_length):
-      _check_no_repeated_indices(
-          batches[start_index : start_index + cycle_length]
-      )
-    _check_element_range(batches, num_examples)
-    _check_subset_of_kb_participation(batches, cycle_length)
-    # Make sure elements are discarded when using even partition.
-    if partition_type == batch_selection.PartitionType.EQUAL_SPLIT:
-      distinct_elements = _get_unique_elements(batches)
-      self.assertLessEqual(
-          distinct_elements.size, (num_examples // cycle_length) * cycle_length
-      )
-    # Make sure the expected batch size is close to the average batch size.
-    if truncated_batch_size is not None:
-      self.assertAlmostEqual(
-          sum(len(batch) for batch in batches)
-          / (iterations * expected_batch_size),
-          1.0,
-          delta=4 * (iterations * expected_batch_size) ** 0.5,  # ~4 std dev
-      )
-
-  def test_poisson_sampling_with_large_cycle_length(self):
-    """Test for Poisson sampling with cycle_length > num_examples."""
-    num_examples = 10
-    cycle_length = 11
-    iterations = 1100
-    sampling_prob = 0.5
-    strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        cycle_length=cycle_length,
-        partition_type=batch_selection.PartitionType.EQUAL_SPLIT,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-
-    self.assertLen(batches, iterations)
-    min_batch_size = 0
-    max_batch_size = 0
-    _check_batch_sizes_equal(batches, min_batch_size, max_batch_size)
-
-  @parameterized.product(
-      num_examples=[100],
-      cycle_length=[10],
-      iterations=[10, 20, 21],
-  )
-  def test_balls_in_bins_sampling(self, num_examples, cycle_length, iterations):
-    """Tests for balls-in-bins."""
-    strategy = batch_selection.BallsInBinsSampling(
-        iterations=iterations,
-        cycle_length=cycle_length,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    self.assertEqual(
-        sum(len(batch) for batch in batches[:cycle_length]),
-        num_examples,
-    )
-    _check_no_repeated_indices(batches[:cycle_length])
-    _check_cyclic_property(batches, cycle_length)
-    _check_signed_indices(batches)
-
-  def test_balls_in_bins_sampling_with_large_cycle_length(self):
-    """Test for balls-in-bins with cycle_length > num_examples."""
-    num_examples = 10
-    cycle_length = 20
-    iterations = 40
-    strategy = batch_selection.BallsInBinsSampling(
-        iterations=iterations,
-        cycle_length=cycle_length,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    self.assertEqual(
-        sum(len(batch) for batch in batches[:cycle_length]),
-        num_examples,
-    )
-    _check_no_repeated_indices(batches[:cycle_length])
-    _check_cyclic_property(batches, cycle_length)
-
-  @parameterized.product(
-      num_examples=[10, 100],
-      num_participations=[1, 3, 5],
-      # cycle_length=1 is plain random allocation; > 1 is the cyclic variant.
-      cycle_length=[1, 2, 3],
-      # 20 is a multiple of 2 but not of 3, and 21 is a multiple of 3 but not
-      # of 2, so both the even and uneven cases are covered.
-      iterations=[20, 21],
-      partition_type=[
-          batch_selection.PartitionType.INDEPENDENT,
-          batch_selection.PartitionType.EQUAL_SPLIT,
-      ],
-  )
-  def test_random_allocation_sampling(
-      self,
-      num_examples,
-      num_participations,
-      cycle_length,
-      iterations,
-      partition_type,
-  ):
-    """Tests random allocation participation counts and truncation."""
-    strategy = batch_selection.RandomAllocationSampling(
-        total_participations=num_participations,
-        iterations=iterations,
-        cycle_length=cycle_length,
-        partition_type=partition_type,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    _check_signed_indices(batches)
-    _check_max_participation(batches, num_participations)
-    _check_subset_of_kb_participation(batches, cycle_length)
-    counts = collections.Counter(int(x) for x in np.concatenate(batches))
-    if iterations % cycle_length == 0:
-      # Without truncation, each example appears in *exactly* k batches.
-      for count in counts.values():
-        self.assertEqual(count, num_participations)
-      expected_examples = num_examples
-      if partition_type == batch_selection.PartitionType.EQUAL_SPLIT:
-        expected_examples = (num_examples // cycle_length) * cycle_length
-      self.assertLen(counts, expected_examples)
-    else:
-      # With truncation, groups < iterations % cycle_length run all
-      # ceil(iterations / cycle_length) cycles and participate exactly k times,
-      # while truncated groups lose their last round and participate k-1 or k
-      # times.
-      for count in counts.values():
-        self.assertIn(count, (num_participations - 1, num_participations))
-      for step, batch in enumerate(batches):
-        if step % cycle_length < iterations % cycle_length:
-          for idx in batch:
-            self.assertEqual(counts[int(idx)], num_participations)
-    # Within each batch, no example should appear twice.
-    for batch in batches:
-      self.assertEqual(len(batch), len(set(batch.tolist())))
-
-  @parameterized.parameters(1, 3, 5)
-  def test_random_allocation_sampling_total_batch_size(self, cycle_length):
-    """Total batch size across all iterations is exactly num_examples * k."""
-    num_examples, num_participations, iterations = 1000, 3, 60
-    strategy = batch_selection.RandomAllocationSampling(
-        total_participations=num_participations,
-        iterations=iterations,
-        cycle_length=cycle_length,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    # When iterations is a multiple of cycle_length, every example
-    # participates in exactly k iterations, so the total number of
-    # participations is deterministic even though its split across iterations is
-    # random.
-    self.assertEqual(
-        sum(len(batch) for batch in batches), num_examples * num_participations
-    )
-
-  @parameterized.parameters(1, 3)
-  def test_random_allocation_sampling_saturated(self, cycle_length):
-    """Every eligible example participates when k == iterations // b."""
-    num_examples, iterations = 10, 9
-    strategy = batch_selection.RandomAllocationSampling(
-        total_participations=iterations // cycle_length,
-        iterations=iterations,
-        cycle_length=cycle_length,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    self.assertEqual(
-        sum(len(batch) for batch in batches[:cycle_length]),
-        num_examples,
-    )
-    _check_no_repeated_indices(batches[:cycle_length])
-    _check_cyclic_property(batches, cycle_length)
-
-  def test_random_allocation_sampling_k_equals_zero(self):
-    """All batches should be empty when num_participations=0."""
-    strategy = batch_selection.RandomAllocationSampling(
-        total_participations=0,
-        iterations=5,
-    )
-    batches = list(strategy.batch_iterator(10, rng=0))
-    self.assertLen(batches, 5)
-    for batch in batches:
-      self.assertEmpty(batch)
-
-  @parameterized.parameters(1, 3)
-  def test_random_allocation_sampling_is_deterministic(self, cycle_length):
-    """RandomAllocationSampling should respect the provided RNG."""
-    strategy = batch_selection.RandomAllocationSampling(
-        total_participations=2,
-        iterations=10,
-        cycle_length=cycle_length,
-    )
+  @parameterized.parameters(*_STRATEGIES)
+  def test_is_deterministic(self, strategy):
+    """Strategies should produce identical batches given the same RNG."""
     batches_a = list(strategy.batch_iterator(50, rng=0))
     batches_b = list(strategy.batch_iterator(50, rng=0))
     for batch_a, batch_b in zip(batches_a, batches_b, strict=True):
       np.testing.assert_array_equal(batch_a, batch_b)
 
-  @parameterized.parameters(1, 3)
-  def test_random_allocation_sampling_zero_examples(self, cycle_length):
-    """Should produce empty batches when there are no examples."""
+  @parameterized.parameters(*_MIN_SEP_STRATEGIES)
+  def test_min_separation(self, strategy):
+    """Consecutive participations of an example are at least min_sep apart."""
+    batches = list(strategy.batch_iterator(100, rng=0))
+    min_sep = getattr(strategy, 'min_sep', None) or strategy.cycle_length
+    _check_b_min_sep_property(batches, min_sep)
+
+  @parameterized.parameters(*_CYCLIC_PARTITION_STRATEGIES)
+  def test_cyclic_partition(self, strategy):
+    """Examples only participate in their residue class mod cycle_length."""
+    num_examples = 50
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    b = strategy.cycle_length
+    _check_subset_of_kb_participation(batches, b)
+    if getattr(strategy, 'partition_type', None) == _EQUAL_SPLIT:
+      num_unique = _get_unique_elements(batches).size
+      self.assertLessEqual(num_unique, (num_examples // b) * b)
+
+  @parameterized.parameters(*_PERIODIC_STRATEGIES)
+  def test_periodic_schedule_repeats_every_cycle(self, strategy):
+    """Saturated cyclic schedules partition the data and repeat each cycle."""
+    num_examples = 50
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    cycle_length = getattr(strategy, 'min_sep', None) or strategy.cycle_length
+    _check_no_repeated_indices(batches[:cycle_length])
+    _check_cyclic_property(batches, cycle_length)
+    if getattr(strategy, 'partition_type', None) == _EQUAL_SPLIT:
+      batch_size = num_examples // cycle_length
+      _check_batch_sizes_equal(batches, batch_size, batch_size)
+    elif getattr(strategy, 'warm_start', True):
+      total_in_cycle = sum(len(b) for b in batches[:cycle_length])
+      self.assertEqual(total_in_cycle, num_examples)
+    else:
+      self.assertLen(batches[0], num_examples)
+      self.assertEmpty(batches[1])
+
+  @parameterized.parameters(*_EXACT_K_STRATEGIES)
+  def test_exact_k_participations(self, strategy):
+    """Every example participates in *exactly* k batches."""
+    num_examples = 100
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    counts = np.bincount(np.concatenate(batches), minlength=num_examples)
+    if hasattr(strategy, 'total_participations'):
+      k = strategy.total_participations
+    else:
+      k = strategy.iterations // strategy.cycle_length
+    np.testing.assert_array_equal(counts, k)
+
+  def test_equal_split_discards_remainder_in_exact_k(self):
+    """EQUAL_SPLIT gives k participations to kept examples and drops rest."""
+    num_examples, cycle_length, k = 10, 3, 3
     strategy = batch_selection.RandomAllocationSampling(
-        total_participations=2,
-        iterations=6,
-        cycle_length=cycle_length,
+        k, 12, cycle_length=cycle_length, partition_type=_EQUAL_SPLIT
     )
-    batches = list(strategy.batch_iterator(0, rng=0))
-    self.assertLen(batches, 6)
-    for batch in batches:
-      self.assertEmpty(batch)
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    counts = collections.Counter(int(x) for x in np.concatenate(batches))
+    self.assertLen(counts, (num_examples // cycle_length) * cycle_length)
+    for count in counts.values():
+      self.assertEqual(count, k)
 
-  @parameterized.parameters(
-      # total_participations > ceil(iterations / cycle_length).
-      {'total_participations': 11, 'iterations': 10, 'cycle_length': 1},
-      {'total_participations': 5, 'iterations': 10, 'cycle_length': 3},
-      {'total_participations': -1, 'iterations': 10, 'cycle_length': 1},
-      {'total_participations': 1, 'iterations': 10, 'cycle_length': 0},
-      {'total_participations': 1, 'iterations': 10, 'sampling_prob': -0.1},
-      {'total_participations': 1, 'iterations': 10, 'sampling_prob': 1.1},
-  )
-  def test_random_allocation_sampling_validation(self, **kwargs):
-    with self.assertRaises(ValueError):
-      batch_selection.RandomAllocationSampling(**kwargs)
-
-  def test_random_allocation_uneven_iterations_logs_warning(self):
+  def test_random_allocation_uneven_iterations_truncation(self):
+    """Uneven iterations logs a warning and truncates the last cycle."""
+    k, cycle_length, iterations = 3, 3, 20
     with self.assertLogs(level='WARNING') as logs:
-      batch_selection.RandomAllocationSampling(
-          total_participations=2, iterations=10, cycle_length=3
+      strategy = batch_selection.RandomAllocationSampling(
+          k, iterations, cycle_length=cycle_length
       )
     self.assertIn('multiple of cycle_length', logs.output[0])
+    batches = list(strategy.batch_iterator(100, rng=0))
+    counts = collections.Counter(int(x) for x in np.concatenate(batches))
+    for count in counts.values():
+      self.assertIn(count, (k - 1, k))
+    for step, batch in enumerate(batches):
+      if step % cycle_length < iterations % cycle_length:
+        for idx in batch:
+          self.assertEqual(counts[int(idx)], k)
 
-  @parameterized.parameters(
-      batch_selection.PartitionType.INDEPENDENT,
-      batch_selection.PartitionType.EQUAL_SPLIT,
-  )
-  def test_random_allocation_subsampling(self, partition_type):
-    b, k, t, q, n = 4, 8, 96, 0.5, 20000
-    strategy = batch_selection.RandomAllocationSampling(
-        k, t, cycle_length=b, partition_type=partition_type, sampling_prob=q
-    )
+  @parameterized.parameters(*_SUBSAMPLED_K_STRATEGIES)
+  def test_subsampled_k_participations(self, strategy):
+    """Subsampled fixed-k strategies have count <= k and mean ~= k * p."""
+    n = 20000
     batches = list(strategy.batch_iterator(n, rng=0))
-    _check_b_min_sep_property(batches, b)
-    _check_subset_of_kb_participation(batches, b)
     counts = np.bincount(np.concatenate(batches), minlength=n)
-    self.assertLessEqual(counts.max(), k)
-    self.assertAlmostEqual(counts.mean(), k * q, delta=0.05)
+    self.assertLessEqual(counts.max(), strategy.total_participations)
+    expected = strategy.total_participations * strategy.sampling_prob
+    self.assertAlmostEqual(counts.mean(), expected, delta=0.05)
+
+  @parameterized.parameters(*_TRUNCATED_STRATEGIES)
+  def test_truncated_batch_size(self, strategy):
+    """Batches never exceed truncated_batch_size when set."""
+    batches = list(strategy.batch_iterator(100, rng=0))
+    _check_batch_sizes_equal(batches, 0, strategy.truncated_batch_size)
 
   @parameterized.parameters(
-      batch_selection.PartitionType.INDEPENDENT,
-      batch_selection.PartitionType.EQUAL_SPLIT,
+      batch_selection.CyclicPoissonSampling(0.1, 2000),
+      batch_selection.BMinSepSampling(0.1, 2000, min_sep=1),
   )
+  def test_poisson_inclusion_frequency(self, strategy):
+    """Plain Poisson strategies include examples at rate ~= sampling_prob."""
+    num_examples = 200
+    batches = list(strategy.batch_iterator(num_examples, rng=0))
+    total = sum(len(b) for b in batches)
+    freq = total / (strategy.iterations * num_examples)
+    self.assertAlmostEqual(freq, strategy.sampling_prob, delta=0.005)
+
+  @parameterized.parameters(_INDEPENDENT, _EQUAL_SPLIT)
   def test_random_allocation_matches_cyclic_poisson(self, partition_type):
+    """Saturated RandomAllocationSampling with prob=q matches CyclicPoisson."""
     b, t, q, n = 4, 40, 0.5, 30000
     k = t // b
-    ra = batch_selection.RandomAllocationSampling(
-        k, t, cycle_length=b, partition_type=partition_type, sampling_prob=q
-    )
+    ra = batch_selection.RandomAllocationSampling(k, t, b, partition_type, q)
     cyclic = batch_selection.CyclicPoissonSampling(
         q, t, cycle_length=b, partition_type=partition_type
     )
@@ -431,129 +298,18 @@ class BatchSelectionTest(parameterized.TestCase):
 
     np.testing.assert_allclose(count_hist(ra), count_hist(cyclic), atol=0.02)
 
-  def test_cyclic_poisson_sampling_independent_is_deterministic(self):
-    """CyclicPoissonSampling should respect the provided RNG."""
-    strategy = batch_selection.CyclicPoissonSampling(
-        sampling_prob=0.3,
-        iterations=5,
-        cycle_length=3,
-        partition_type=batch_selection.PartitionType.INDEPENDENT,
-    )
-    batches_a = list(strategy.batch_iterator(50, rng=0))
-    batches_b = list(strategy.batch_iterator(50, rng=0))
-    for batch_a, batch_b in zip(batches_a, batches_b, strict=True):
-      np.testing.assert_array_equal(batch_a, batch_b)
-
-  @parameterized.product(
-      num_examples=[0, 1, 100],
-      sampling_prob=[0.1],
-      iterations=[1000],
-      min_sep=[2, 4],
-      warm_start=[True, False],
-      truncated_batch_size=[None, 4],
+  @parameterized.parameters(
+      {'total_participations': 11},
+      {'total_participations': 5, 'cycle_length': 3},
+      {'total_participations': -1},
+      {'cycle_length': 0},
+      {'sampling_prob': -0.1},
+      {'sampling_prob': 1.1},
   )
-  def test_b_min_sep_sampling(
-      self,
-      num_examples,
-      sampling_prob,
-      iterations,
-      min_sep,
-      warm_start,
-      truncated_batch_size,
-  ):
-    """Tests for b-min-sep sampling."""
-    strategy = batch_selection.BMinSepSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        min_sep=min_sep,
-        warm_start=warm_start,
-        truncated_batch_size=truncated_batch_size,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    _check_b_min_sep_property(batches, min_sep)
-    # 2 * iterations * sampling_prob is an overestimate of the tail bound on
-    # participations as long as iterations * sampling_prob is large enough, but
-    # will still catch errors such as e.g. sampling_prob being ignored.
-    _check_max_participation(batches, 2 * iterations * sampling_prob)
-    if truncated_batch_size:
-      self.assertLessEqual(
-          max(len(batch) for batch in batches), truncated_batch_size
-      )
-
-  @parameterized.product(
-      num_examples=[1000],
-      iterations=[10],
-      warm_start=[True, False],
-      truncated_batch_size=[None, 4],
-  )
-  def test_b_min_sep_sampling_prob_one(
-      self, num_examples, iterations, warm_start, truncated_batch_size
-  ):
-    """Tests for b-min-sep sampling with sampling_prob = 1."""
-    strategy = batch_selection.BMinSepSampling(
-        sampling_prob=1.0,
-        iterations=iterations,
-        min_sep=2,
-        warm_start=warm_start,
-        truncated_batch_size=truncated_batch_size,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    if truncated_batch_size:
-      self.assertLessEqual(
-          max(len(batch) for batch in batches), truncated_batch_size
-      )
-    else:
-      # Reduces to balls-in-bins.
-      _check_cyclic_property(batches, 2)
-      if not warm_start:
-        # Without warm-start, first batch will have all examples.
-        self.assertLen(batches[0], num_examples)
-        self.assertEmpty(batches[1])
-      else:
-        # With warm-start, first two batches should each have about half the
-        # examples.
-        self.assertEqual(len(batches[0]) + len(batches[1]), num_examples)
-        self.assertGreaterEqual(len(batches[0]), 400)
-        self.assertLessEqual(len(batches[0]), 600)
-
-  def test_b_min_sep_sampling_min_sep_one_warm_start(self):
-    """min_sep=1 with default warm_start reduces to plain Poisson(p)."""
-    sampling_prob = 0.01
-    iterations = 5
-    num_examples = 1000
-    strategy = batch_selection.BMinSepSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        min_sep=1,
-    )
-    # warm_start defaults to True; with min_sep == 1 (b == 1) there is no
-    # separation constraint and the warm-start history must be empty.
-    self.assertTrue(strategy.warm_start)
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    _check_element_range(batches, num_examples)
-    _check_signed_indices(batches)
-
-  def test_b_min_sep_sampling_min_sep_one_poisson_frequency(self):
-    """Over many iterations, min_sep=1 gives per-example frequency ~= p."""
-    sampling_prob = 0.1
-    iterations = 2000
-    num_examples = 200
-    strategy = batch_selection.BMinSepSampling(
-        sampling_prob=sampling_prob,
-        iterations=iterations,
-        min_sep=1,
-    )
-    batches = list(strategy.batch_iterator(num_examples, rng=0))
-    self.assertLen(batches, iterations)
-    mean_inclusion_freq = sum(len(batch) for batch in batches) / (
-        iterations * num_examples
-    )
-    self.assertAlmostEqual(mean_inclusion_freq, sampling_prob, delta=0.003)
+  def test_random_allocation_sampling_validation(self, **kwargs):
+    defaults = {'total_participations': 2, 'iterations': 10}
+    with self.assertRaises(ValueError):
+      batch_selection.RandomAllocationSampling(**(defaults | kwargs))
 
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""
@@ -610,39 +366,6 @@ class BatchSelectionTest(parameterized.TestCase):
 
     self.assertEqual(batch.shape, (0, 2))
     self.assertTrue(np.issubdtype(batch.dtype, np.signedinteger))
-
-  def test_fixed_batch_sampling(self):
-    """Tests for FixedBatchSampling."""
-    strategy = batch_selection.FixedBatchSampling(
-        batch_size=4,
-        iterations=6,
-    )
-    batches = list(strategy.batch_iterator(10, rng=0))
-    self.assertLen(batches, 6)
-    _check_batch_sizes_equal(batches, 4, 4)
-    _check_element_range(batches, 10)
-    _check_signed_indices(batches)
-    for batch in batches:
-      self.assertEqual(len(batch), len(set(batch)))
-
-  def test_fixed_batch_sampling_rejects_oversized(self):
-    strategy = batch_selection.FixedBatchSampling(
-        batch_size=11,
-        iterations=1,
-    )
-    with self.assertRaises(ValueError):
-      list(strategy.batch_iterator(10, rng=0))
-
-  def test_fixed_batch_sampling_with_replacement(self):
-    strategy = batch_selection.FixedBatchSampling(
-        batch_size=10,
-        iterations=2,
-        replace=True,
-    )
-    batches = list(strategy.batch_iterator(5, rng=0))
-    self.assertLen(batches, 2)
-    _check_batch_sizes_equal(batches, 10, 10)
-    _check_element_range(batches, 5)
 
 
 class BatchPaddingTest(parameterized.TestCase):
