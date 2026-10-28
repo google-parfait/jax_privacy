@@ -34,6 +34,9 @@ class ExecutionPlanTest(parameterized.TestCase):
   @parameterized.parameters(
       {"strategy": np.array([])},
       {"truncated_batch_size": 5, "num_examples": None},
+      {"normalize_by": 0},
+      {"normalize_by": float("nan")},
+      {"normalize_by": float("inf")},
   )
   def test_bandmf_validation(self, **kwargs):
     default_kwargs = {
@@ -45,6 +48,18 @@ class ExecutionPlanTest(parameterized.TestCase):
     default_kwargs.update(kwargs)
     with self.assertRaises(ValueError):
       BandMFConfig(**default_kwargs)
+
+  def test_bandmf_rejects_nan_normalize_by(self):
+    with self.assertRaisesRegex(
+        ValueError, r"Expected normalize_by=nan > 0"
+    ):
+      BandMFConfig(
+          strategy=np.linspace(1, 0, 10),
+          iterations=20,
+          expected_participations=2,
+          noise_multiplier=1.0,
+          normalize_by=float("nan"),
+      )
 
   @parameterized.parameters(
       {
