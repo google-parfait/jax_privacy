@@ -20,6 +20,59 @@ import dp_accounting
 from jax_privacy.experimental.monte_carlo import delta_calculation
 import numpy as np
 
+_PrivacyLossSamples = delta_calculation.PrivacyLossSamples
+
+
+def _samples(
+    privacy_loss, counts=None
+) -> list[delta_calculation.PrivacyLossSamples]:
+  """Builds one PrivacyLossSamples per hyperparameter value."""
+  if counts is None:
+    counts = [None] * len(privacy_loss)
+  return [_PrivacyLossSamples(p, c) for p, c in zip(privacy_loss, counts)]
+
+
+def _point_mass(
+    privacy_loss, count=1000, log_weight=None, support_bound=1.0
+) -> delta_calculation.PrivacyLossSamples:
+  """Samples all equal to a single privacy loss value."""
+  if log_weight is None:
+    return _PrivacyLossSamples(
+        [privacy_loss], [count], support_bound=support_bound
+    )
+  # Counts cannot be combined with log weights, so repeat the sample instead.
+  return _PrivacyLossSamples(
+      [privacy_loss] * count,
+      log_weights=[log_weight] * count,
+      support_bound=support_bound,
+  )
+
+
+class PrivacyLossSamplesTest(parameterized.TestCase):
+
+  @parameterized.named_parameters(
+      ('not_1d', dict(privacy_loss=[[1.0, 2.0]])),
+      ('wrong_counts_shape', dict(privacy_loss=[1.0, 2.0], counts=[1, 2, 3])),
+      (
+          'wrong_log_weights_shape',
+          dict(privacy_loss=[1.0, 2.0], log_weights=[0.0]),
+      ),
+      (
+          'counts_with_log_weights',
+          dict(privacy_loss=[1.0], counts=[2], log_weights=[0.0]),
+      ),
+  )
+  def test_rejects_invalid_arguments(self, kwargs):
+    with self.assertRaises(ValueError):
+      delta_calculation.PrivacyLossSamples(**kwargs)
+
+  @parameterized.parameters(([1.0, 2.0, 3.0], None, 3), ([1.0, 2.0], [2, 5], 7))
+  def test_num_samples(self, privacy_loss, counts, expected):
+    self.assertEqual(
+        delta_calculation.PrivacyLossSamples(privacy_loss, counts).num_samples,
+        expected,
+    )
+
 
 class DeltaCalculationTest(parameterized.TestCase):
 
@@ -287,25 +340,19 @@ class DeltaCalculationTest(parameterized.TestCase):
       self, epsilon, samples, counts, expected_delta
   ):
     delta = delta_calculation.delta_from_epsilon_and_samples(
-        epsilon, samples, counts
+        epsilon, _PrivacyLossSamples(samples, counts)
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
 
   @parameterized.named_parameters(
-      ('zero_log_weights', None, [0.0, 0.0], 3 / 4),
-      ('log_weights', None, [math.log(0.25), math.log(0.5)], 5 / 16),
-      (
-          'log_weights_with_counts',
-          [2, 1],
-          [math.log(0.25), math.log(0.5)],
-          1 / 4,
-      ),
+      ('zero_log_weights', [0.0, 0.0], 3 / 4),
+      ('log_weights', [math.log(0.25), math.log(0.5)], 5 / 16),
   )
   def test_delta_from_epsilon_and_samples_with_log_weights(
-      self, counts, log_weights, expected_delta
+      self, log_weights, expected_delta
   ):
     delta = delta_calculation.delta_from_epsilon_and_samples(
-        3, [3 + math.log(2), 1e9], counts, log_weights=log_weights
+        3, _PrivacyLossSamples([3 + math.log(2), 1e9], log_weights=log_weights)
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
 
@@ -313,24 +360,20 @@ class DeltaCalculationTest(parameterized.TestCase):
     # A sample below epsilon contributes 0 regardless of its weight, even when
     # exp(log_weight) overflows.
     delta = delta_calculation.delta_from_epsilon_and_samples(
-        3, [1.0, 3 + math.log(2)], log_weights=[1000.0, 0.0]
+        3,
+        _PrivacyLossSamples([1.0, 3 + math.log(2)], log_weights=[1000.0, 0.0]),
     )
     self.assertAlmostEqual(delta, 1 / 4)
 
-  @parameterized.named_parameters(
-      ('wrong_counts_shape', {'counts': [1, 2, 3]}),
-      ('wrong_log_weights_shape', {'log_weights': [0.0]}),
-      (
-          'log_weights_with_other_event',
-          {
-              'log_weights': [0.0, 0.0],
-              'other_event': dp_accounting.NoOpDpEvent(),
-          },
-      ),
-  )
-  def test_delta_from_epsilon_and_samples_raises(self, kwargs):
+  def test_delta_from_epsilon_and_samples_rejects_weights_with_other_event(
+      self,
+  ):
     with self.assertRaises(ValueError):
-      delta_calculation.delta_from_epsilon_and_samples(3, [1.0, 2.0], **kwargs)
+      delta_calculation.delta_from_epsilon_and_samples(
+          3,
+          _PrivacyLossSamples([1.0, 2.0], log_weights=[0.0, 0.0]),
+          other_event=dp_accounting.NoOpDpEvent(),
+      )
 
   @parameterized.parameters(
       ([1, 2, 3], None),
@@ -341,12 +384,11 @@ class DeltaCalculationTest(parameterized.TestCase):
   )
   def test_composition_with_no_op_event(self, samples, counts):
     """No-op DP event should have same result as no event."""
+    samples = _PrivacyLossSamples(samples, counts)
     delta_1 = delta_calculation.delta_from_epsilon_and_samples(
-        3, samples, counts, dp_accounting.NoOpDpEvent()
+        3, samples, dp_accounting.NoOpDpEvent()
     )
-    delta_2 = delta_calculation.delta_from_epsilon_and_samples(
-        3, samples, counts
-    )
+    delta_2 = delta_calculation.delta_from_epsilon_and_samples(3, samples)
     self.assertBetween(delta_1, delta_2 * (1 - 1e-7), delta_2 * (1 + 1e-7))
 
   @parameterized.parameters(
@@ -359,7 +401,9 @@ class DeltaCalculationTest(parameterized.TestCase):
   def test_composition_with_nonprivate_dp_event(self, samples, counts):
     """Non-private DP event should force delta = 1 always."""
     delta = delta_calculation.delta_from_epsilon_and_samples(
-        3, samples, counts, dp_accounting.NonPrivateDpEvent()
+        3,
+        _PrivacyLossSamples(samples, counts),
+        dp_accounting.NonPrivateDpEvent(),
     )
     self.assertEqual(delta, 1.0)
 
@@ -376,7 +420,7 @@ class DeltaCalculationTest(parameterized.TestCase):
     )
     accountant.compose(dp_accounting.GaussianDpEvent(1 / (2**0.5)))
     delta_1 = delta_calculation.delta_from_epsilon_and_samples(
-        1.0, samples, other_event=other_event
+        1.0, _PrivacyLossSamples(samples), other_event=other_event
     )
     delta_2 = accountant.get_delta(1.0)
     self.assertAlmostEqual(delta_1, delta_2, places=3)
@@ -486,13 +530,14 @@ class DeltaCalculationTest(parameterized.TestCase):
     result = delta_calculation.perform_calibration_from_samples(
         1.0,
         0.1,
-        positive_samples=positive_samples,
-        positive_counts=positive_counts,
-        negative_samples=negative_samples,
-        negative_counts=negative_counts,
+        positive_samples=_samples(positive_samples, positive_counts),
+        negative_samples=(
+            None
+            if negative_samples is None
+            else _samples(negative_samples, negative_counts)
+        ),
     )
     self.assertEqual(result, expected_result)
-    pass
 
   @parameterized.named_parameters(
       (
@@ -569,8 +614,7 @@ class DeltaCalculationTest(parameterized.TestCase):
     result = delta_calculation.perform_calibration_from_samples(
         1.0,
         0.1,
-        positive_samples=positive_samples,
-        positive_counts=[[1000], [1000]],
+        positive_samples=_samples(positive_samples, [[1000], [1000]]),
         other_event=other_event,
     )
     self.assertEqual(result, expected_result)
@@ -581,57 +625,95 @@ class DeltaCalculationTest(parameterized.TestCase):
       (
           'positive_log_weights_rescue_0',
           dict(
-              positive_samples=[[10], [10]], positive_log_weights=[[-20], [0]]
+              positive_samples=[
+                  _point_mass(10, log_weight=-20),
+                  _point_mass(10, log_weight=0),
+              ]
           ),
           (True, 0),
       ),
       (
           'negative_log_weights_sink_1',
           dict(
-              positive_samples=[[1], [1]],
-              negative_samples=[[10], [10]],
-              negative_counts=[[1000], [1000]],
-              negative_log_weights=[[-20], [0]],
+              positive_samples=[_point_mass(1)] * 2,
+              negative_samples=[
+                  _point_mass(10, log_weight=-20),
+                  _point_mass(10, log_weight=0),
+              ],
           ),
           (True, 0),
       ),
       (
-          'scalar_support_bound_all_pass',
-          dict(positive_samples=[[1], [1]], support_bound=0.5),
+          'support_bound_all_pass',
+          dict(positive_samples=[_point_mass(1, support_bound=0.5)] * 2),
           (True, 1),
       ),
       (
-          'scalar_support_bound_all_fail',
-          dict(positive_samples=[[10], [10]], support_bound=0.5),
+          'support_bound_all_fail',
+          dict(positive_samples=[_point_mass(10, support_bound=0.5)] * 2),
           (False, _FAILURE_DELTA_HALF_SUPPORT),
       ),
       (
-          'sequence_support_bound_uses_max',
-          dict(positive_samples=[[10], [10]], support_bound=[0.2, 0.5]),
+          'support_bound_uses_max',
+          dict(
+              positive_samples=[
+                  _point_mass(10, support_bound=0.2),
+                  _point_mass(10, support_bound=0.5),
+              ]
+          ),
           (False, _FAILURE_DELTA_HALF_SUPPORT),
       ),
+      (
+          'none_negative_entry_skips_negative_check',
+          dict(
+              positive_samples=[_point_mass(1)] * 2,
+              negative_samples=[None, _point_mass(1)],
+          ),
+          (True, 1),
+      ),
+      (
+          'none_negative_entry_skips_negative_check_only_for_its_index',
+          dict(
+              positive_samples=[_point_mass(1)] * 2,
+              negative_samples=[None, _point_mass(10)],
+          ),
+          (True, 0),
+      ),
+      (
+          'none_negative_entry_does_not_count_toward_min_samples',
+          dict(
+              positive_samples=[_point_mass(10, count=2000)] * 2,
+              negative_samples=[None, _point_mass(1, count=2000)],
+          ),
+          (False, delta_calculation.get_base_delta(2000, 0.1)),
+      ),
   )
-  def test_perform_calibration_from_samples_with_importance_sampling(
+  def test_perform_calibration_from_samples_with_weights_and_bounds(
       self, kwargs, expected_result
   ):
     result = delta_calculation.perform_calibration_from_samples(
-        1.0, 0.1, positive_counts=[[1000], [1000]], **kwargs
+        1.0, 0.1, **kwargs
     )
     self.assertEqual(result, expected_result)
 
   @parameterized.named_parameters(
-      ('log_weights_length', dict(positive_log_weights=[[0.0]])),
-      ('support_bound_greater_than_one', dict(support_bound=[0.5, 1.5])),
+      ('negative_samples_length', dict(negative_samples=[_point_mass(1)])),
+      (
+          'support_bound_greater_than_one',
+          dict(positive_samples=[_point_mass(1, support_bound=1.5)] * 2),
+      ),
+      (
+          'log_weights_with_other_event',
+          dict(
+              positive_samples=[_point_mass(1, log_weight=0.0)] * 2,
+              other_event=dp_accounting.NoOpDpEvent(),
+          ),
+      ),
   )
   def test_perform_calibration_from_samples_raises(self, kwargs):
+    kwargs.setdefault('positive_samples', [_point_mass(1)] * 2)
     with self.assertRaises(ValueError):
-      delta_calculation.perform_calibration_from_samples(
-          1.0,
-          0.1,
-          positive_samples=[[1], [1]],
-          positive_counts=[[1000], [1000]],
-          **kwargs,
-      )
+      delta_calculation.perform_calibration_from_samples(1.0, 0.1, **kwargs)
 
 
 if __name__ == '__main__':

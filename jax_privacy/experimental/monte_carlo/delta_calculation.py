@@ -14,6 +14,7 @@
 
 """Utilities for calculating deltas in Monte Carlo accounting."""
 
+import dataclasses
 from typing import Sequence
 
 import dp_accounting
@@ -26,6 +27,57 @@ from ... import _validate
 DpEventOrAccountant = (
     dp_accounting.dp_event.DpEvent | dp_accounting.pld.PLDAccountant
 )
+
+
+@dataclasses.dataclass(frozen=True)
+class PrivacyLossSamples:
+  r"""Samples from a privacy loss distribution.
+
+  Attributes:
+    privacy_loss: 1D array of privacy loss samples. That is, to estimate the
+      :math:`e^\varepsilon` hockey-stick divergence between :math:`P` and
+      :math:`Q`, we sample :math:`x` from :math:`P` and record
+      :math:`\ln(P(x)/Q(x))`.
+    counts: Optional counts of each sample, of the same shape as
+      ``privacy_loss``. This can be helpful if the number of samples is very
+      large, in which case one can discretize the samples and pass the counts of
+      each discretization. If ``None``, each sample has count 1.
+    log_weights: Optional importance weights in log space, of the same shape as
+      ``privacy_loss``, for samples :math:`x` drawn from a proposal distribution
+      :math:`R` instead of :math:`P`. Passing :math:`\ln(P(x)/R(x))` for each
+      sample keeps the estimate unbiased. Cannot be combined with ``counts``:
+      the weight depends on :math:`x` and not only on its privacy loss, so
+      discretizing by privacy loss would bias the estimate.
+    support_bound: An upper bound on each (weighted) sample of the hockey-stick
+      divergence, see :func:`get_overall_delta`. Plain Monte Carlo samples are
+      bounded by 1.
+  """
+
+  privacy_loss: npt.ArrayLike
+  counts: npt.ArrayLike | None = None
+  log_weights: npt.ArrayLike | None = None
+  support_bound: float = 1.0
+
+  def __post_init__(self):
+    shape = np.shape(self.privacy_loss)
+    if len(shape) != 1:
+      raise ValueError('privacy_loss must be a 1D array.')
+    for name in ['counts', 'log_weights']:
+      value = getattr(self, name)
+      if value is not None and np.shape(value) != shape:
+        raise ValueError(f'{name} must have the same shape as privacy_loss.')
+    if self.counts is not None and self.log_weights is not None:
+      raise ValueError(
+          'counts cannot be combined with log_weights: discretizing'
+          ' importance-weighted samples is not supported.'
+      )
+
+  @property
+  def num_samples(self) -> float:
+    """The total count of samples."""
+    if self.counts is None:
+      return np.size(self.privacy_loss)
+    return np.sum(self.counts)
 
 
 def _convert_to_accountant(
@@ -256,77 +308,51 @@ def get_base_delta(
 
 def delta_from_epsilon_and_samples(
     epsilon: float,
-    samples: npt.ArrayLike,
-    counts: npt.ArrayLike | None = None,
+    samples: PrivacyLossSamples,
     other_event: DpEventOrAccountant | None = None,
-    log_weights: npt.ArrayLike | None = None,
-):
-  r"""Calculate the delta parameter for a given epsilon and list of samples.
+) -> float:
+  """Calculate the delta parameter for a given epsilon and samples.
 
   Args:
     epsilon: The epsilon parameter of the DP guarantee.
-    samples: Samples from the privacy loss distribution. That is, to estimate
-      the :math:`e^\varepsilon` hockey-stick divergence between :math:`P` and
-      :math:`Q`, we sample :math:`x` from :math:`P`, and then compute
-      :math:`\ln(P(x)/Q(x))` to get a single sample.
-    counts: A list of floats representing the counts of the samples. If
-      ``None``, we assume the samples are count 1. This can be helpful if the
-      number of samples is very large, in which case one can discretize the
-      samples and pass the counts of each discretization. If passed, should be
-      the same length as samples.
+    samples: Samples from the privacy loss distribution.
     other_event: An optional DpEvent or PrivacyAccountant object. If ``None``,
       we are just computing the delta parameter for the event whose samples are
       given by samples. If an accountant is given, the method returns the
       estimate for Monte Carlo accounting of the composition of the event whose
       samples are given by samples, and other_event. Cannot be combined with
-      ``log_weights``.
-    log_weights: Optional importance weights in log space, for samples :math:`x`
-      drawn from a proposal distribution :math:`R` instead of :math:`P`. Passing
-      :math:`\ln(P(x)/R(x))` for each sample keeps the estimate unbiased. If
-      passed, should be the same length as samples.
+      importance-weighted samples.
 
   Returns:
     The delta parameter given by Monte Carlo estimation of the hockey-stick
     divergence.
   """
-  samples = np.asarray(samples)
   _validate.non_negative(epsilon=epsilon)
-  if samples.ndim != 1:
-    raise ValueError('samples must be a 1D array.')
-  for name, value in [('counts', counts), ('log_weights', log_weights)]:
-    if value is not None and np.shape(value) != samples.shape:
-      raise ValueError(
-          f'{name} must be a 1D array of the same size as samples.'
-      )
-  if log_weights is not None and other_event is not None:
-    raise ValueError('log_weights cannot be combined with other_event.')
+  if other_event is not None and samples.log_weights is not None:
+    raise ValueError('other_event cannot be combined with log_weights.')
+  privacy_loss = np.asarray(samples.privacy_loss)
   if other_event is None:
-    estimands = -np.expm1(np.minimum(epsilon - samples, 0.0))
-    if log_weights is not None:
+    estimands = -np.expm1(np.minimum(epsilon - privacy_loss, 0.0))
+    if samples.log_weights is not None:
       # Combine in log space: a zero estimand with a huge weight is 0, not nan.
       with np.errstate(divide='ignore'):
-        estimands = np.exp(np.log(estimands) + log_weights)
+        estimands = np.exp(np.log(estimands) + samples.log_weights)
   else:
     other_event = _convert_to_accountant(other_event)
     # TODO: Cite an external derivation for this formula.
-    estimands = [other_event.get_delta(epsilon - s) for s in samples]
-  return np.average(estimands, weights=counts)
+    estimands = [other_event.get_delta(epsilon - s) for s in privacy_loss]
+  return float(np.average(estimands, weights=samples.counts))
 
 
 def perform_calibration_from_samples(
     epsilon: float,
     delta: float,
     *,
-    positive_samples: Sequence[npt.ArrayLike],
-    positive_counts: Sequence[npt.ArrayLike] | None = None,
-    negative_samples: Sequence[npt.ArrayLike] | None = None,
-    negative_counts: Sequence[npt.ArrayLike] | None = None,
+    positive_samples: Sequence[PrivacyLossSamples],
+    negative_samples: Sequence[PrivacyLossSamples | None] | None = None,
     other_event: (
         DpEventOrAccountant | Sequence[DpEventOrAccountant] | None
     ) = None,
-    positive_log_weights: Sequence[npt.ArrayLike] | None = None,
-    negative_log_weights: Sequence[npt.ArrayLike] | None = None,
-    support_bound: npt.ArrayLike = 1.0,
 ) -> tuple[bool, int | float]:
   r"""Perform calibration to find highest-utility parameter for DP target.
 
@@ -357,9 +383,9 @@ def perform_calibration_from_samples(
     >>> nm_sweep = [2.0, 1.0, 0.5]
     >>> positive_samples = []
     >>> for nm in nm_sweep:
-    ...   positive_samples.append(
+    ...   positive_samples.append(PrivacyLossSamples(
     ...     np.random.normal(loc=0.5 / nm ** 2, size=1_000_000)
-    ...   )
+    ...   ))
     >>> passes_verification, best_nm_index = perform_calibration_from_samples(
     ...   epsilon, delta, positive_samples=positive_samples
     ... )
@@ -370,20 +396,15 @@ def perform_calibration_from_samples(
   Args:
     epsilon: The epsilon parameter of the target DP guarantee.
     delta: The delta parameter of the target DP guarantee.
-    positive_samples: A list of lists of privacy loss samples from the positive
-      case, one list for each hyperparameter value.
-    positive_counts: An optional list of lists of counts corresponding to each
-      of the lists of positive samples. If None, we assume the samples are count
-      1. If passed, each list should be the same length as the associated list
-      of positive_samples.
-    negative_samples: An optional list of lists of privacy loss samples from the
-      negative case, one list for each hyperparameter value. If None, this means
-      we assume the positive case has a worse DP guarantee than the negative
-      case, so we only need to do accounting for the positive case.
-    negative_counts: An optional list of lists of counts corresponding to each
-      of the lists of negative samples. If None, we assume the samples are
-      unweighted. If passed, each list should be the same length as the
-      associated list of negative_samples. Ignored if negative_samples is None.
+    positive_samples: Privacy loss samples from the positive case, one
+      :class:`PrivacyLossSamples` for each hyperparameter value.
+    negative_samples: Optional privacy loss samples from the negative case, one
+      for each hyperparameter value. If None, this means we assume the positive
+      case has a worse DP guarantee than the negative case, so we only need to
+      do accounting for the positive case. Individual entries may also be None,
+      meaning the negative case is known (e.g. from an analytic bound) to have
+      delta at most the base delta that the positive case is verified against,
+      see :func:`get_base_delta`, so only the positive case is checked for it.
     other_event: Optional DpEvent or PLDAccountant or sequence thereof. For
       simplicity we don't accept Sequence[DpEvent], the ComposedDpEvent can be
       used instead. For brevity, we below refer to other_event as if it is a
@@ -406,15 +427,7 @@ def perform_calibration_from_samples(
       samples_2]``, where ``samples_i`` is the privacy loss samples for
       M(sigma_i) (and ``samples_1`` is independent of ``samples_2``), and
       other_event is ``[GaussianDpEvent(sigma_1), GaussianDpEvent(sigma_2)]``.
-    positive_log_weights: An optional list of lists of importance weights in log
-      space corresponding to each of the lists of positive samples, see
-      :func:`delta_from_epsilon_and_samples`. Cannot be combined with
-      ``other_event``.
-    negative_log_weights: As ``positive_log_weights``, but for the negative
-      samples. Ignored if negative_samples is None.
-    support_bound: An upper bound on each (weighted) sample of the hockey-stick
-      divergence, see :func:`get_overall_delta`. Either a single float, or one
-      float per hyperparameter value, in which case the maximum is used.
+      Cannot be combined with importance-weighted samples.
 
   Returns:
     Either ``(True, i)``, or ``(False, base_delta)``. If there is an associated
@@ -428,65 +441,39 @@ def perform_calibration_from_samples(
   if not positive_samples:
     raise ValueError('positive_samples must be non-empty.')
   num_values = len(positive_samples)
-  for name, value in [
-      ('positive_counts', positive_counts),
-      ('negative_samples', negative_samples),
-      ('negative_counts', negative_counts),
-      ('positive_log_weights', positive_log_weights),
-      ('negative_log_weights', negative_log_weights),
-  ]:
-    if value is not None and len(value) != num_values:
-      raise ValueError(
-          f'positive_samples and {name} must have the same length.'
-      )
-  if positive_counts is None:
-    positive_counts = [np.ones_like(samples) for samples in positive_samples]
-  if negative_samples is not None and negative_counts is None:
-    negative_counts = [np.ones_like(samples) for samples in negative_samples]
-  if positive_log_weights is None:
-    positive_log_weights = [None] * num_values
-  if negative_log_weights is None:
-    negative_log_weights = [None] * num_values
-  positive_sample_counts = [sum(counts) for counts in positive_counts]
   if negative_samples is None:
-    negative_sample_counts = []
-  else:
-    negative_sample_counts = [sum(counts) for counts in negative_counts]
-
+    negative_samples = [None] * num_values
+  elif len(negative_samples) != num_values:
+    raise ValueError(
+        'positive_samples and negative_samples must have the same length.'
+    )
   if other_event is None:
     other_events = [None] * num_values
+  elif isinstance(other_event, Sequence):
+    other_events = [_convert_to_accountant(e) for e in other_event]
   else:
-    if isinstance(other_event, Sequence):
-      other_events = [_convert_to_accountant(e) for e in other_event]
-    else:
-      other_events = [_convert_to_accountant(other_event)] * num_values
+    other_events = [_convert_to_accountant(other_event)] * num_values
 
+  all_samples = [
+      s for s in [*positive_samples, *negative_samples] if s is not None
+  ]
   # TODO: Support a per-hyperparameter number of samples and
   # support bound, with a corresponding per-hyperparameter base_delta, rather
   # than conservatively using the minimum and maximum across hyperparameters.
-  min_sample_count = min(positive_sample_counts + negative_sample_counts)
-  support_bound = float(np.max(support_bound))
-
+  min_sample_count = min(s.num_samples for s in all_samples)
+  support_bound = max(s.support_bound for s in all_samples)
   base_delta = get_base_delta(min_sample_count, delta, support_bound)
 
   def _passes(i: int) -> bool:
     positive_delta = delta_from_epsilon_and_samples(
-        epsilon,
-        positive_samples[i],
-        positive_counts[i],
-        other_events[i],
-        positive_log_weights[i],
+        epsilon, positive_samples[i], other_events[i]
     )
     if positive_delta > base_delta:
       return False
-    if negative_samples is None:
+    if negative_samples[i] is None:
       return True
     negative_delta = delta_from_epsilon_and_samples(
-        epsilon,
-        negative_samples[i],
-        negative_counts[i],
-        other_events[i],
-        negative_log_weights[i],
+        epsilon, negative_samples[i], other_events[i]
     )
     return negative_delta <= base_delta
 

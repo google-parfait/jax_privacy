@@ -40,14 +40,13 @@ Currently only :class:`~jax_privacy.batch_selection.BallsInBinsSampling` is
 supported, since the mixture modes must be enumerable.
 """
 
-import dataclasses
-
 import dp_accounting
 import numpy as np
 import scipy as sp
 
 from ... import _validate
 from ... import batch_selection
+from . import delta_calculation
 from . import sample_generation
 
 
@@ -57,26 +56,6 @@ def _validate_balls_in_bins(strategy) -> None:
         'Importance sampling is only supported for balls-in-bins sampling, got'
         f' {type(strategy)}.'
     )
-
-
-@dataclasses.dataclass(frozen=True)
-class ImportanceSample:
-  r"""Importance-weighted privacy loss samples.
-
-  Attributes:
-    privacy_loss: The privacy loss of each sample, i.e. :math:`\ln(P(y)/Q(y))`
-      for positive samples and :math:`\ln(Q(y)/P(y))` for negative samples, as
-      returned by :func:`~.sample_generation.get_privacy_loss_sample`.
-    log_weights: The log of the evaluation density over the proposal density for
-      each sample, to be passed as ``log_weights`` to
-      :func:`~.delta_calculation.delta_from_epsilon_and_samples`.
-    support_bound: An upper bound on each weighted hockey-stick sample, to be
-      passed as ``support_bound`` to :mod:`~.delta_calculation` functions.
-  """
-
-  privacy_loss: np.ndarray
-  log_weights: np.ndarray
-  support_bound: float
 
 
 def log_support_bound(alpha: float, epsilon: float, kappa: float) -> float:
@@ -215,7 +194,7 @@ def get_importance_sampled_privacy_loss(
     seed: sample_generation.Seed = None,
     positive_sample: bool = True,
     num_samples: int = 1,
-) -> ImportanceSample:
+) -> delta_calculation.PrivacyLossSamples:
   r"""Returns importance-weighted samples from the dominating PLD of DP-BandMF.
 
   This is the importance sampling analogue of
@@ -232,8 +211,7 @@ def get_importance_sampled_privacy_loss(
     >>> positive = get_importance_sampled_privacy_loss(
     ...     strategy, noise_multiplier=1.0, c_col=np.array([1.0, 0.5]),
     ...     epsilon=1.0, seed=0, num_samples=1000)
-    >>> delta = delta_calculation.delta_from_epsilon_and_samples(
-    ...     1.0, positive.privacy_loss, log_weights=positive.log_weights)
+    >>> delta = delta_calculation.delta_from_epsilon_and_samples(1.0, positive)
     >>> overall_delta = delta_calculation.get_overall_delta(
     ...     1000, delta, support_bound=positive.support_bound)
     >>> bool(positive.support_bound < 1 and delta <= overall_delta <= 1)
@@ -259,7 +237,9 @@ def get_importance_sampled_privacy_loss(
       efficient to generate multiple samples in a single call.
 
   Returns:
-    An :class:`ImportanceSample` of ``num_samples`` samples.
+    ``num_samples`` importance-weighted
+    :class:`~.delta_calculation.PrivacyLossSamples`, with ``log_weights`` the
+    log of the evaluation density over the proposal density for each sample.
   """
   kappa = compute_kappa(strategy, noise_multiplier, c_col)
   if alpha is None:
@@ -295,4 +275,6 @@ def get_importance_sampled_privacy_loss(
   else:
     privacy_loss = -positive_privacy_loss
     log_weights = -proposal_log_density_ratio
-  return ImportanceSample(privacy_loss, log_weights, float(np.exp(log_bound)))
+  return delta_calculation.PrivacyLossSamples(
+      privacy_loss, log_weights=log_weights, support_bound=np.exp(log_bound)
+  )

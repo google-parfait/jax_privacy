@@ -142,11 +142,8 @@ def main(_) -> None:
       delta_calculation.perform_calibration_from_samples(
           EPSILON,
           DELTA,
-          positive_samples=[s.privacy_loss for s in positive_samples],
-          negative_samples=[s.privacy_loss for s in negative_samples],
-          positive_log_weights=[s.log_weights for s in positive_samples],
-          negative_log_weights=[s.log_weights for s in negative_samples],
-          support_bound=support_bound,
+          positive_samples=positive_samples,
+          negative_samples=negative_samples,
       )
   )
   if passes_verification:

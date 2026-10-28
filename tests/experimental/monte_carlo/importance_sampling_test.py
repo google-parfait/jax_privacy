@@ -303,9 +303,7 @@ class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
 
     # The weighted estimate is what delta_from_epsilon_and_samples computes.
     self.assertAlmostEqual(
-        delta_calculation.delta_from_epsilon_and_samples(
-            epsilon, sample.privacy_loss, log_weights=sample.log_weights
-        ),
+        delta_calculation.delta_from_epsilon_and_samples(epsilon, sample),
         weighted.mean(),
     )
 
