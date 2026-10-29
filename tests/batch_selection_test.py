@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import collections
+import itertools
 import math
 
 from absl.testing import absltest
@@ -90,6 +91,9 @@ _MIN_SEP_STRATEGIES = [
     batch_selection.RandomAllocationSampling(4, 30, 3, sampling_prob=0.5),
     batch_selection.BMinSepSampling(0.2, 50, min_sep=2, warm_start=True),
     batch_selection.BMinSepSampling(0.2, 50, min_sep=4, warm_start=False),
+    batch_selection.MinSepRandomAllocation(4, 30, min_sep=3),
+    batch_selection.MinSepRandomAllocation(4, 30, 3, random_rotation=True),
+    batch_selection.MinSepRandomAllocation(4, 30, 3, sampling_prob=0.5),
 ]
 
 _CYCLIC_PARTITION_STRATEGIES = [
@@ -118,11 +122,16 @@ _EXACT_K_STRATEGIES = [
     batch_selection.RandomAllocationSampling(1, 20, cycle_length=1),
     batch_selection.RandomAllocationSampling(3, 20, cycle_length=2),
     batch_selection.RandomAllocationSampling(5, 21, cycle_length=3),
+    batch_selection.MinSepRandomAllocation(1, 10),
+    batch_selection.MinSepRandomAllocation(3, 20, min_sep=4),
+    batch_selection.MinSepRandomAllocation(4, 20, 3, random_rotation=True),
 ]
 
 _SUBSAMPLED_K_STRATEGIES = [
     batch_selection.RandomAllocationSampling(8, 96, 4, _INDEPENDENT, 0.5),
     batch_selection.RandomAllocationSampling(8, 96, 4, _EQUAL_SPLIT, 0.5),
+    batch_selection.MinSepRandomAllocation(8, 96, 4, False, 0.5),
+    batch_selection.MinSepRandomAllocation(8, 96, 4, True, 0.5),
 ]
 
 _TRUNCATED_STRATEGIES = [
@@ -281,6 +290,49 @@ class BatchSelectionTest(parameterized.TestCase):
     freq = total / (strategy.iterations * num_examples)
     self.assertAlmostEqual(freq, strategy.sampling_prob, delta=0.005)
 
+  @parameterized.parameters(
+      batch_selection.BallsInBinsSampling(6, cycle_length=3),
+      batch_selection.RandomAllocationSampling(2, 5, cycle_length=1),
+      batch_selection.RandomAllocationSampling(2, 6, cycle_length=2),
+      batch_selection.MinSepRandomAllocation(2, 6, min_sep=2),
+      batch_selection.MinSepRandomAllocation(3, 7, min_sep=2),
+      batch_selection.MinSepRandomAllocation(2, 6, 2, random_rotation=True),
+      batch_selection.MinSepRandomAllocation(3, 7, 2, random_rotation=True),
+  )
+  def test_uniform_over_valid_participation_patterns(self, strategy):
+    """Fixed-k strategies sample uniformly over all valid k-step patterns."""
+    n, t = 30000, strategy.iterations
+    if hasattr(strategy, 'total_participations'):
+      k = strategy.total_participations
+    else:
+      k = t // strategy.cycle_length
+
+    def is_valid(steps):
+      gaps = [y - x for x, y in itertools.pairwise(steps)]
+      if isinstance(strategy, batch_selection.MinSepRandomAllocation):
+        if strategy.random_rotation:
+          gaps.append(steps[0] + t - steps[-1])
+        return min(gaps) >= strategy.min_sep
+      b = strategy.cycle_length
+      if isinstance(strategy, batch_selection.BallsInBinsSampling):
+        return all(gap == b for gap in gaps)
+      return len({s % b for s in steps}) <= 1
+
+    # Encode each example's realized participation set as a t-bit integer mask
+    # (bit s is 1 iff the example participated in step s) and compare the
+    # empirical histogram over [0, 2**t) to the uniform distribution on valid
+    # k-subsets.
+    masks = np.zeros(n, dtype=np.int64)
+    for step, batch in enumerate(strategy.batch_iterator(n, rng=0)):
+      masks[batch] |= 1 << step
+    counts = np.bincount(masks, minlength=1 << t) / n
+
+    all_combos = itertools.combinations(range(t), k)
+    valid_masks = [sum(1 << s for s in c) for c in all_combos if is_valid(c)]
+    expected = np.zeros(1 << t)
+    expected[valid_masks] = 1 / len(valid_masks)
+    np.testing.assert_allclose(counts, expected, atol=0.015)
+
   @parameterized.parameters(_INDEPENDENT, _EQUAL_SPLIT)
   def test_random_allocation_matches_cyclic_poisson(self, partition_type):
     """Saturated RandomAllocationSampling with prob=q matches CyclicPoisson."""
@@ -310,6 +362,38 @@ class BatchSelectionTest(parameterized.TestCase):
     defaults = {'total_participations': 2, 'iterations': 10}
     with self.assertRaises(ValueError):
       batch_selection.RandomAllocationSampling(**(defaults | kwargs))
+
+  def test_min_sep_random_allocation_cyclic_wrap_around(self):
+    """random_rotation=True also enforces min_sep across the t -> 0 boundary."""
+    min_sep = 4
+    strategy = batch_selection.MinSepRandomAllocation(
+        3, 15, min_sep=min_sep, random_rotation=True
+    )
+    batches = list(strategy.batch_iterator(200, rng=0))
+    _check_b_min_sep_property(batches + batches[: min_sep - 1], min_sep)
+
+  def test_min_sep_random_allocation_random_rotation_flattens_marginal(self):
+    """random_rotation=True yields uniform per-step marginal k / t."""
+    k, t, min_sep, n = 3, 10, 3, 20000
+    strategy = batch_selection.MinSepRandomAllocation(
+        k, t, min_sep=min_sep, random_rotation=True
+    )
+    sizes = [len(b) / n for b in strategy.batch_iterator(n, rng=0)]
+    np.testing.assert_allclose(sizes, k / t, atol=0.02)
+
+  @parameterized.parameters(
+      {'total_participations': 0},
+      {'iterations': 0},
+      {'min_sep': 0},
+      {'sampling_prob': -0.1},
+      {'sampling_prob': 1.1},
+      {'min_sep': 4, 'random_rotation': False},
+      {'min_sep': 4, 'random_rotation': True},
+  )
+  def test_min_sep_random_allocation_validation(self, **kwargs):
+    defaults = {'total_participations': 3, 'iterations': 10}
+    with self.assertRaises(ValueError):
+      batch_selection.MinSepRandomAllocation(**(defaults | kwargs))
 
   def test_user_selection_strategy(self):
     """Tests for UserSelectionStrategy."""

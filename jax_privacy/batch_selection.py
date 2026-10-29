@@ -96,6 +96,7 @@ __all__ = [
     'BMinSepSampling',
     'CyclicPoissonSampling',
     'FixedBatchSampling',
+    'MinSepRandomAllocation',
     'MultiOwnerGraph',
     'MultiOwnerMinSepSampling',
     'PartitionType',
@@ -143,6 +144,24 @@ def _equal_split_partition(
   group_size = num_examples // num_groups
   groups = np.array_split(indices, num_groups)
   return [g[:group_size] for g in groups]
+
+
+def _random_compositions(
+    rng: np.random.Generator,
+    num_examples: int,
+    total: int,
+    num_parts: int,
+) -> np.ndarray:
+  """Returns uniform compositions of ``total`` into ``num_parts`` parts."""
+  # Draw uniform nonnegative integer compositions summing to `total` via
+  # stars and bars: pick `num_parts - 1` distinct bar positions in
+  # `[0, total + num_parts - 1)` and take the gaps between sorted bars.
+  n = total + num_parts - 1
+  perm = rng.random((num_examples, n)).argsort(axis=1)
+  bars = np.sort(perm[:, : num_parts - 1], axis=1)
+  lo = np.full((num_examples, 1), -1)
+  hi = np.full((num_examples, 1), n)
+  return np.diff(np.concatenate([lo, bars, hi], axis=1), axis=1) - 1
 
 
 def split_and_pad_global_batch(
@@ -565,7 +584,7 @@ class FixedBatchSampling(BatchSelectionStrategy):
 
 @dataclasses.dataclass(frozen=True)
 class BMinSepSampling(BatchSelectionStrategy):
-  """Implements b-min-sep sampling.
+  """Implements b-min-sep Poisson sampling.
 
   Each batch is sampled using Poisson sampling, ignoring any example that
   participated in the previous ``min_sep - 1`` iterations.
@@ -657,6 +676,92 @@ class BMinSepSampling(BatchSelectionStrategy):
       if len(history) >= b:
         history.pop(0)
       yield sample
+
+
+@dataclasses.dataclass(frozen=True)
+class MinSepRandomAllocation(BatchSelectionStrategy):
+  """Implements k-out-of-t b-min-sep random allocation.
+
+  This implements Algorithm 2 of https://arxiv.org/abs/2610.12712 (and the
+  random-rotation variant in Appendix B when ``random_rotation=True``). Each
+  example independently selects :math:`k` steps in ``[0, iterations)`` uniformly
+  at random over all subsets of size :math:`k` whose consecutive participations
+  are separated by at least ``min_sep`` (:math:`b`) iterations.
+
+  References:
+    * https://arxiv.org/abs/2610.12712
+
+  Attributes:
+    total_participations: The number of steps each example is allocated to
+      participate in before subsampling (k).
+    iterations: The total number of iterations / batches to generate (t).
+    min_sep: The minimum separation between consecutive participations of the
+      same example (b). Defaults to ``1``.
+    random_rotation: Whether to place participations on a cycle and apply a
+      uniform random rotation for a uniform per-iteration marginal. Defaults to
+      ``False``.
+    sampling_prob: Probability of independently keeping each allocated
+      participation. Defaults to ``1.0`` (no subsampling).
+  """
+
+  total_participations: int
+  iterations: int
+  min_sep: int = 1
+  random_rotation: bool = False
+  sampling_prob: float = 1.0
+
+  def __post_init__(self):
+    _validate.positive(
+        total_participations=self.total_participations,
+        iterations=self.iterations,
+        min_sep=self.min_sep,
+    )
+    _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
+    min_iters = self.total_participations * self.min_sep
+    if self.iterations < min_iters:
+      raise ValueError(f'Expected iterations={self.iterations} >= {min_iters}.')
+
+  def batch_iterator(
+      self, num_examples: int, rng: RngType = None
+  ) -> Iterator[np.ndarray]:
+    rng = np.random.default_rng(rng)
+    dtype = _get_dtype(num_examples)
+
+    if self.random_rotation:
+      positions = self._cyclic_positions(num_examples, rng)
+    else:
+      positions = self._linear_positions(num_examples, rng)
+
+    for step in range(self.iterations):
+      selected = np.any(positions == step, axis=1)
+      if self.sampling_prob < 1.0:
+        poisson_mask = rng.random(num_examples) < self.sampling_prob
+        kept = selected & poisson_mask
+      else:
+        kept = selected
+      yield np.where(kept)[0].astype(dtype)
+
+  def _linear_positions(
+      self, num_examples: int, rng: np.random.Generator
+  ) -> np.ndarray:
+    """Returns k positions in [0, t) with interior gaps >= min_sep."""
+    # Distribute the leftover slack t - 1 - (k - 1) * b across k + 1 parts
+    # (k - 1 interior gaps plus two free ends) and offset by b per step.
+    k, b, t = self.total_participations, self.min_sep, self.iterations
+    parts = _random_compositions(rng, num_examples, t - 1 - (k - 1) * b, k + 1)
+    return np.cumsum(parts[:, :k], axis=1) + np.arange(k) * b
+
+  def _cyclic_positions(
+      self, num_examples: int, rng: np.random.Generator
+  ) -> np.ndarray:
+    """Returns k cyclic positions with gaps >= min_sep and uniform rotation."""
+    # Distribute the cyclic slack t - k * b across k gaps, offset by b per step,
+    # and apply an independent uniform shift mod t to flatten the marginal.
+    k, b, t = self.total_participations, self.min_sep, self.iterations
+    parts = _random_compositions(rng, num_examples, t - k * b, k)
+    starts = np.cumsum(parts, axis=1) + np.arange(k) * b
+    rotation = rng.integers(t, size=(num_examples, 1))
+    return (starts + rotation) % t
 
 
 @dataclasses.dataclass(frozen=True)
