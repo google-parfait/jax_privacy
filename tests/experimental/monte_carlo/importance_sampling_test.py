@@ -206,9 +206,39 @@ class ReverseDivergenceBoundTest(parameterized.TestCase):
       )
 
 
+class SupportBoundTest(parameterized.TestCase):
+
+  # At _KAPPA = 2.5 the optimal bound is about 0.69, 0.58, 0.46, 0.34 and 0.15
+  # for epsilon = 0.5, 1, 1.5, 2 and 3.
+  @parameterized.parameters(1.5, 2.0, 3.0)
+  def test_is_optimal_bound_when_worthwhile(self, epsilon):
+    bound = importance_sampling.support_bound(
+        _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon
+    )
+    self.assertLess(bound, 0.5)
+    self.assertAlmostEqual(
+        np.log(bound),
+        importance_sampling.log_support_bound(
+            importance_sampling.optimal_stretch(epsilon, _KAPPA),
+            epsilon,
+            _KAPPA,
+        ),
+    )
+
+  @parameterized.parameters(0.5, 1.0)
+  def test_is_one_when_not_worthwhile(self, epsilon):
+    self.assertEqual(
+        importance_sampling.support_bound(
+            _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon
+        ),
+        1.0,
+    )
+
+
 class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
 
-  @parameterized.product(positive_sample=[True, False], epsilon=[0.5, 1.0, 3.0])
+  # Importance sampling is worthwhile at these epsilons, see SupportBoundTest.
+  @parameterized.product(positive_sample=[True, False], epsilon=[1.5, 2.0, 3.0])
   def test_weighted_estimands_respect_support_bound(
       self, positive_sample, epsilon
   ):
@@ -221,12 +251,10 @@ class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
         positive_sample=positive_sample,
         num_samples=100_000,
     )
-    self.assertAlmostEqual(
-        np.log(sample.support_bound),
-        importance_sampling.log_support_bound(
-            importance_sampling.optimal_stretch(epsilon, _KAPPA),
-            epsilon,
-            _KAPPA,
+    self.assertEqual(
+        sample.support_bound,
+        importance_sampling.support_bound(
+            _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon
         ),
     )
     for eval_epsilon in [epsilon, epsilon + 1.0]:
@@ -236,10 +264,34 @@ class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
       self.assertGreaterEqual(weighted.min(), 0.0)
       self.assertLessEqual(weighted.max(), sample.support_bound * (1 + 1e-9))
 
-  def test_rejects_alpha_worse_than_plain_monte_carlo(self):
-    with self.assertRaisesRegex(ValueError, "worse than plain Monte Carlo"):
+  @parameterized.product(positive_sample=[True, False], alpha=[None, 10.0])
+  def test_falls_back_to_plain_monte_carlo_when_bound_is_not_useful(
+      self, positive_sample, alpha
+  ):
+    # Importance sampling is not worthwhile at epsilon = 0.5 (see
+    # SupportBoundTest), and alpha = 10 gives a bound far above 1.
+    epsilon = 0.5
+    kwargs = dict(positive_sample=positive_sample, num_samples=1000)
+    sample = importance_sampling.get_importance_sampled_privacy_loss(
+        _STRATEGY,
+        _NOISE_MULTIPLIER,
+        _C_COL,
+        epsilon,
+        alpha=alpha,
+        seed=0xFA11,
+        **kwargs,
+    )
+    plain_privacy_loss, _ = sample_generation.get_privacy_loss_sample(
+        _STRATEGY, _NOISE_MULTIPLIER, _C_COL, seed=0xFA11, **kwargs
+    )
+    self.assertEqual(sample.support_bound, 1.0)
+    self.assertIsNone(sample.log_weights)
+    np.testing.assert_array_equal(sample.privacy_loss, plain_privacy_loss)
+
+  def test_rejects_alpha_below_one(self):
+    with self.assertRaises(ValueError):
       importance_sampling.get_importance_sampled_privacy_loss(
-          _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon=1.0, alpha=10.0
+          _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon=1.0, alpha=0.5
       )
 
   @parameterized.named_parameters(("forward", True), ("reverse", False))
@@ -257,23 +309,15 @@ class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
     plain_privacy_loss, _ = sample_generation.get_privacy_loss_sample(
         _STRATEGY, _NOISE_MULTIPLIER, _C_COL, seed=0xDECAF, **kwargs
     )
-    np.testing.assert_allclose(sample.log_weights, 0.0, atol=1e-12)
+    self.assertIsNone(sample.log_weights)
     self.assertEqual(sample.support_bound, 1.0)
-    if positive_sample:
-      np.testing.assert_allclose(sample.privacy_loss, plain_privacy_loss)
-    else:
-      # Sampling from Q as a mixture with zero modes consumes the rng
-      # differently from sampling Q directly, so only the distributions agree.
-      self.assertAlmostEqual(
-          sample.privacy_loss.mean(), plain_privacy_loss.mean(), delta=0.1
-      )
-      self.assertAlmostEqual(
-          sample.privacy_loss.var(), plain_privacy_loss.var(), delta=0.1
-      )
+    np.testing.assert_array_equal(sample.privacy_loss, plain_privacy_loss)
 
   @parameterized.named_parameters(("forward", True), ("reverse", False))
   def test_is_unbiased_and_reduces_variance(self, positive_sample):
-    epsilon, num_samples = 1.0, 200_000
+    # At epsilon = 2 and _KAPPA = 2.5 the optimal bound is about 0.34, so
+    # importance sampling is actually used.
+    epsilon, num_samples = 2.0, 200_000
     sample = importance_sampling.get_importance_sampled_privacy_loss(
         _STRATEGY,
         _NOISE_MULTIPLIER,
