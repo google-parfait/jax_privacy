@@ -25,9 +25,15 @@ Samples are drawn with importance sampling, which bounds each weighted sample by
 a constant B < 1 and so reduces the number of samples needed by roughly a factor
 of B. B depends on the noise multiplier (through the ratio of the largest mode
 norm to the noise scale), and for calibration, we conservatively use the largest
-B across the sweep.
+B across the sweep. Where B is not small enough to pay for the extra cost of an
+importance-sampled draw, plain Monte Carlo is used for that noise multiplier.
+
+The dominating pair must be checked in both directions. The reverse direction
+admits an analytic upper bound, so wherever that bound already meets the
+verification threshold, only the forward direction needs to be sampled.
 """
 
+import functools
 import math
 
 from absl import app
@@ -98,15 +104,12 @@ def main(_) -> None:
       cycle_length=EPOCH_LENGTH, iterations=ITERATIONS
   )
 
-  # The optimal stretch factor and resulting bound on the weighted samples for
-  # each noise multiplier in the sweep.
-  kappas = [
-      importance_sampling.compute_kappa(strategy, nm, C_COL) for nm in nm_sweep
-  ]
-  alphas = [importance_sampling.optimal_stretch(EPSILON, k) for k in kappas]
+  # The bound on the weighted samples for each noise multiplier (1 where
+  # importance sampling is not worthwhile and plain Monte Carlo is used). For
+  # calibration, we conservatively use the largest across the sweep.
   support_bound = max(
-      math.exp(importance_sampling.log_support_bound(alpha, EPSILON, kappa))
-      for alpha, kappa in zip(alphas, kappas)
+      importance_sampling.support_bound(strategy, nm, C_COL, EPSILON)
+      for nm in nm_sweep
   )
   minimum_samples = delta_calculation.minimum_samples_to_calibrate(
       BASE_DELTA, DELTA, support_bound
@@ -124,26 +127,38 @@ def main(_) -> None:
   # calls can also be massively parallelized. For practical applications, we
   # recommend parallelizing across these two dimensions in whatever manner best
   # fits your workflow.
-  def _sample(nm, alpha, positive_sample):
-    return importance_sampling.get_importance_sampled_privacy_loss(
-        strategy=strategy,
-        noise_multiplier=nm,
-        c_col=C_COL,
-        epsilon=EPSILON,
-        alpha=alpha,
-        positive_sample=positive_sample,
+  positives, negatives = [], []
+  for nm in nm_sweep:
+    sample = functools.partial(
+        importance_sampling.get_importance_sampled_privacy_loss,
+        strategy,
+        nm,
+        C_COL,
+        EPSILON,
         num_samples=minimum_samples,
     )
-
-  positive_samples = [_sample(nm, a, True) for nm, a in zip(nm_sweep, alphas)]
-  negative_samples = [_sample(nm, a, False) for nm, a in zip(nm_sweep, alphas)]
+    positives.append(sample(positive_sample=True))
+    # Where the reverse direction provably meets the verification threshold
+    # BASE_DELTA, only the forward direction needs sampling. The bound decreases
+    # with the noise multiplier, so this is a prefix of the sweep.
+    reverse_bound = importance_sampling.reverse_divergence_bound(
+        strategy, nm, C_COL, EPSILON
+    )
+    negatives.append(
+        sample(positive_sample=False) if reverse_bound > BASE_DELTA else None
+    )
+  print(
+      'Sampled the reverse direction for'
+      f' {sum(s is not None for s in negatives)} of {len(nm_sweep)} noise'
+      ' multipliers'
+  )
 
   passes_verification, best_nm_index = (
       delta_calculation.perform_calibration_from_samples(
           EPSILON,
           DELTA,
-          positive_samples=positive_samples,
-          negative_samples=negative_samples,
+          positive_samples=positives,
+          negative_samples=negatives,
       )
   )
   if passes_verification:

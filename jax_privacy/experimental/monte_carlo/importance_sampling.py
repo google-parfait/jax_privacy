@@ -201,7 +201,9 @@ def reverse_divergence_bound(
   Monte Carlo accounting must estimate the hockey-stick divergence in both
   directions of the dominating pair. The reverse direction is typically far
   smaller than the forward one, and this bound is often enough to show it meets
-  the target delta, in which case only the forward direction needs sampling.
+  the threshold the forward direction is verified against (the base delta of
+  :mod:`~.delta_calculation`), in which case only the forward direction needs
+  sampling.
   The bound is exact for a single mode and informative when
   :func:`compute_kappa` is below roughly ``2 * epsilon``, the same regime in
   which importance sampling is worthwhile.
