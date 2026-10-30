@@ -68,7 +68,7 @@ class ClipPyTreeTest(parameterized.TestCase):
     clipped, _ = clipping.clip_pytree(pytree, **kwargs)
 
     # Float16/bfloat16 rounding can exceed the bound by ~1 ULP.
-    atol = max(jnp.finfo(x.dtype).eps for x in jax.tree.leaves(clipped))
+    atol = max(float(jnp.finfo(x.dtype).eps) for x in jax.tree.leaves(clipped))
     if kwargs['rescale_to_unit_norm']:
       self.assertLessEqual(optax.tree.norm(clipped), 1.0 + atol)
     else:
