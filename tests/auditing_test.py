@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import itertools
+import typing
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -73,6 +74,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_bootstrap_params_empty_quantiles(self):
     with self.assertRaisesRegex(ValueError, 'quantiles cannot be empty'):
       auditing.BootstrapParams(quantiles=[])
+
+  @parameterized.named_parameters(
+      ('scalar', 0.5),
+      ('2d', [[0.25, 0.75]]),
+  )
+  def test_bootstrap_params_non_1d_quantiles(self, quantiles):
+    with self.assertRaisesRegex(ValueError, 'quantiles must be a 1-D sequence'):
+      auditing.BootstrapParams(quantiles=quantiles)
 
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
   def test_bootstrap_params_quantiles_out_of_range(self, quantiles):
@@ -620,7 +629,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertEqual(eps, 0)
 
   @parameterized.product(
-      quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
+      quantiles=((0.025,), (0.975,), (0.025, 0.975), (0.025, 0.5, 0.975)),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
   )
   def test_bootstrap(self, quantiles, bootstrap_type):
@@ -775,6 +784,60 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         [1.0, 2.0, 3.0], [-1.0, 0.0, 0.5, 1.5]
     )
     self.assertEqual(auditor.num_canaries, (3, 4))
+
+  def test_scalar_methods_return_python_float(self):
+    auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
+    self.assertIsInstance(auditor.epsilon_clopper_pearson(0.05, 0.01), float)
+    self.assertIsInstance(
+        auditor.epsilon_clopper_pearson(
+            0.05, 0.01, threshold_strategy=auditing.MultiSplit(seed=0)
+        ),
+        float,
+    )
+    self.assertIsInstance(auditor.epsilon_raw_counts(min_count=5), float)
+    self.assertIsInstance(auditor.tpr_at_given_fpr(0.1), float)
+    self.assertIsInstance(auditor.attack_auroc(), float)
+    self.assertIsInstance(auditor.max_accuracy(), float)
+    self.assertIsInstance(auditor.max_accuracy(significance=0.05), float)
+    self.assertIsInstance(auditor.epsilon_from_gdp(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run_fdp(0.05, 0.01), float)
+
+  def test_overloaded_return_types(self):
+    auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
+    bootstrap_params = auditing.BootstrapParams(
+        num_samples=10, quantiles=(0.05, 0.95), seed=0xBAD5EED
+    )
+
+    eps_scalar = typing.assert_type(
+        auditor.epsilon_raw_counts(min_count=5), float
+    )
+    eps_boot = typing.assert_type(
+        auditor.epsilon_raw_counts(
+            min_count=5, bootstrap_params=bootstrap_params
+        ),
+        np.ndarray,
+    )
+    tpr_scalar = typing.assert_type(auditor.tpr_at_given_fpr(0.1), float)
+    tpr_boot = typing.assert_type(
+        auditor.tpr_at_given_fpr(0.1, bootstrap_params=bootstrap_params),
+        np.ndarray,
+    )
+    tpr_arr = typing.assert_type(
+        auditor.tpr_at_given_fpr([0.1, 0.2]), np.ndarray
+    )
+    auroc_scalar = typing.assert_type(auditor.attack_auroc(), float)
+    auroc_boot = typing.assert_type(
+        auditor.attack_auroc(bootstrap_params=bootstrap_params), np.ndarray
+    )
+
+    self.assertIsInstance(eps_scalar, float)
+    self.assertIsInstance(eps_boot, np.ndarray)
+    self.assertIsInstance(tpr_scalar, float)
+    self.assertIsInstance(tpr_boot, np.ndarray)
+    self.assertIsInstance(tpr_arr, np.ndarray)
+    self.assertIsInstance(auroc_scalar, float)
+    self.assertIsInstance(auroc_boot, np.ndarray)
 
 
 if __name__ == '__main__':
