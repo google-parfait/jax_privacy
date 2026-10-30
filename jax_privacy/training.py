@@ -41,7 +41,7 @@ Example Usage:
   >>> state0 = trainer.init(params0)
   >>> state = trainer.fit(np.vstack([data, in_c]), state0, rng_or_seed=0)
   >>> auditor = audit(loss_fn, state.params, in_c, out_c, params0)
-  >>> float(auditor.attack_auroc())
+  >>> auditor.attack_auroc()
   1.0
 """
 
