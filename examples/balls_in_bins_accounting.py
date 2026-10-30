@@ -24,9 +24,9 @@ this reduces the memory overhead.
 Samples are drawn with importance sampling, which bounds each weighted sample by
 a constant B < 1 and so reduces the number of samples needed by roughly a factor
 of B. B depends on the noise multiplier (through the ratio of the largest mode
-norm to the noise scale), and for calibration, we conservatively use the largest
-B across the sweep. Where B is not small enough to pay for the extra cost of an
-importance-sampled draw, plain Monte Carlo is used for that noise multiplier.
+norm to the noise scale), and so does the number of samples drawn for it. Where
+B is not small enough to pay for the extra cost of an importance-sampled draw,
+plain Monte Carlo is used for that noise multiplier.
 
 The dominating pair must be checked in both directions. The reverse direction
 admits an analytic upper bound, so wherever that bound already meets the
@@ -105,19 +105,22 @@ def main(_) -> None:
   )
 
   # The bound on the weighted samples for each noise multiplier (1 where
-  # importance sampling is not worthwhile and plain Monte Carlo is used). For
-  # calibration, we conservatively use the largest across the sweep.
-  support_bound = max(
+  # importance sampling is not worthwhile and plain Monte Carlo is used), and
+  # the number of samples each then needs.
+  support_bounds = [
       importance_sampling.support_bound(strategy, nm, C_COL, EPSILON)
       for nm in nm_sweep
+  ]
+  num_samples = delta_calculation.minimum_samples_per_verification(
+      BASE_DELTA, DELTA, support_bounds
   )
-  minimum_samples = delta_calculation.minimum_samples_to_calibrate(
-      BASE_DELTA, DELTA, support_bound
+  plain_num_samples = delta_calculation.minimum_samples_to_calibrate(
+      BASE_DELTA, DELTA
   )
   print(
-      f'Minimum samples to calibrate: {minimum_samples} (importance sampling,'
-      f' support bound {support_bound:.3f}) vs'
-      f' {delta_calculation.minimum_samples_to_calibrate(BASE_DELTA, DELTA)}'
+      f'Minimum samples to calibrate: {num_samples.sum()} over the sweep'
+      f' (importance sampling, support bounds {min(support_bounds):.3f} to'
+      f' {max(support_bounds):.3f}) vs {plain_num_samples * len(nm_sweep)}'
       ' (plain Monte Carlo)'
   )
 
@@ -128,14 +131,14 @@ def main(_) -> None:
   # recommend parallelizing across these two dimensions in whatever manner best
   # fits your workflow.
   positives, negatives = [], []
-  for nm in nm_sweep:
+  for nm, n in zip(nm_sweep, num_samples):
     sample = functools.partial(
         importance_sampling.get_importance_sampled_privacy_loss,
         strategy,
         nm,
         C_COL,
         EPSILON,
-        num_samples=minimum_samples,
+        num_samples=n,
     )
     positives.append(sample(positive_sample=True))
     # Where the reverse direction provably meets the verification threshold

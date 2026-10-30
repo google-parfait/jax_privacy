@@ -92,19 +92,22 @@ def _convert_to_accountant(
     raise ValueError('Unsupported DpEventOrAccountant type.')
 
 
-def _kl(q: float, p: float) -> float:
-  """KL divergence between Bernoulli(q) and Bernoulli(p)."""
-  if q == p:
-    return 0.0
+def _kl(q: npt.ArrayLike, p: npt.ArrayLike) -> np.ndarray:
+  """KL divergence between Bernoulli(q) and Bernoulli(p), elementwise."""
+  q, p = np.asarray(q, dtype=float), np.asarray(p, dtype=float)
   # The two terms nearly cancel when q and p are both small, so the second is
   # computed with log1p to retain full relative precision.
-  with np.errstate(divide='ignore'):
-    return q * np.log(q / p) + (1 - q) * (np.log1p(-q) - np.log1p(-p))
+  with np.errstate(divide='ignore', invalid='ignore'):
+    kl = q * np.log(q / p) + (1 - q) * (np.log1p(-q) - np.log1p(-p))
+  return np.where(q == p, 0.0, kl)
 
 
 def _hoeffding_bound(
-    num_samples: int, tau: float, delta: float, support_bound: float = 1.0
-) -> float:
+    num_samples: npt.ArrayLike,
+    tau: float,
+    delta: float,
+    support_bound: npt.ArrayLike = 1.0,
+) -> np.ndarray:
   """Bound on prob that sample mean <= delta if true mean > tau * delta.
 
   Fact 4.2 of https://arxiv.org/pdf/2412.16802, applied to samples in
@@ -117,31 +120,38 @@ def _hoeffding_bound(
     support_bound: An upper bound on the samples.
 
   Returns:
-    The KL-Hoeffding bound on the probability.
+    The KL-Hoeffding bound on the probability, elementwise in ``num_samples``
+    and ``support_bound``.
   """
   _validate.in_range(1, np.inf, tau=tau)
-  # Callers keep tau * delta <= support_bound, but rounding can push the ratio
-  # just above 1, where _kl would take the log of a negative number.
-  return np.exp(
-      -num_samples
-      * _kl(delta / support_bound, min(tau * delta / support_bound, 1.0))
-  )
+  rescaled_delta = delta / np.asarray(support_bound)
+  # A true mean above support_bound is impossible, so where tau * delta exceeds
+  # it the bound is 0 (the KL is infinite).
+  kl = _kl(rescaled_delta, np.minimum(tau * rescaled_delta, 1.0))
+  return np.exp(-np.asarray(num_samples) * kl)
 
 
-def _validate_support_bound(support_bound: float, delta: float) -> None:
-  """Checks that support_bound is in (delta, 1]."""
-  if support_bound > 1:
+def _validate_support_bound(support_bound: npt.ArrayLike, delta: float) -> None:
+  """Checks that every support_bound is in (delta, 1]."""
+  if np.max(support_bound) > 1:
     raise ValueError(
         'support_bound must be at most 1. If this came from importance'
         ' sampling, the proposal is worse than plain Monte Carlo; use'
         ' support_bound=1 and unweighted samples instead.'
     )
-  if support_bound <= delta:
+  if np.min(support_bound) <= delta:
     raise ValueError('support_bound must be greater than delta.')
 
 
+def _validate_num_samples(num_samples: npt.ArrayLike) -> None:
+  if np.min(num_samples) <= 0:
+    raise ValueError(f'Expected num_samples={num_samples} > 0.')
+
+
 def get_overall_delta(
-    num_samples: int, base_delta: float, support_bound: float = 1.0
+    num_samples: npt.ArrayLike,
+    base_delta: float,
+    support_bound: npt.ArrayLike = 1.0,
 ) -> float:
   """The delta we can formally report using Monte Carlo verification.
 
@@ -155,17 +165,23 @@ def get_overall_delta(
   https://arxiv.org/abs/2602.09338. If we are only verifying one mechanism
   (which is undesirable in practice), a tighter bound is possible.
 
+  The verifications may use different numbers of samples and support bounds,
+  passed as arrays with one entry per verification. Each verification is then
+  wrong with a probability computed from its own number of samples and support
+  bound, while the privacy loss after a wrong verification is bounded by the
+  largest support bound.
+
   Args:
-    num_samples: The number of samples used in Monte Carlo verification.
+    num_samples: The number of samples used in each Monte Carlo verification.
     base_delta: The base_delta such that we use the samples to verify that each
       mechanism satisfies (epsilon, base_delta)-DP.
     support_bound: An upper bound on each (weighted) sample of the hockey-stick
-      divergence, in (base_delta, 1]. This is 1 for standard Monte Carlo
-      estimation, and can be much smaller with importance sampling, in which
-      case fewer samples are needed. Since the true delta is the mean of the
-      samples, it is also at most support_bound, so the result equals
-      ``support_bound * get_overall_delta(num_samples, base_delta /
-      support_bound)``.
+      divergence, in (base_delta, 1], for each verification. This is 1 for
+      standard Monte Carlo estimation, and can be much smaller with importance
+      sampling, in which case fewer samples are needed. Since the true delta is
+      the mean of the samples, it is also at most support_bound, so for a single
+      support bound the result equals ``support_bound *
+      get_overall_delta(num_samples, base_delta / support_bound)``.
 
   Returns:
     overall_delta such that we can report the end-to-end pipeline of Monte Carlo
@@ -173,32 +189,29 @@ def get_overall_delta(
     overall_delta)-DP.
   """
   _validate.in_range(0, 1, closed='right', base_delta=base_delta)
-  _validate.positive(num_samples=num_samples)
+  _validate_num_samples(num_samples)
   _validate_support_bound(support_bound, base_delta)
+  max_support_bound = float(np.max(support_bound))
 
   def overall_delta_from_tau(tau):
-    # With probability at most q the verification is wrong, in which case we
-    # only know the true delta is at most support_bound.
-    q = _hoeffding_bound(num_samples, tau, base_delta, support_bound)
-    return tau * base_delta + q * (support_bound - tau * base_delta)
+    # With probability at most q the first verification that should fail
+    # passes instead (so q is a maximum, not a union bound), in which case we
+    # only know the true delta is at most the largest support bound.
+    q = np.max(_hoeffding_bound(num_samples, tau, base_delta, support_bound))
+    return tau * base_delta + q * (max_support_bound - tau * base_delta)
 
   best_tau = scipy.optimize.minimize_scalar(
       overall_delta_from_tau,
-      bounds=(1, support_bound / base_delta),
+      bounds=(1, max_support_bound / base_delta),
       method='bounded',
   ).x
-  return min(overall_delta_from_tau(best_tau), support_bound)
+  return min(overall_delta_from_tau(best_tau), max_support_bound)
 
 
 def minimum_samples_to_calibrate(
     base_delta: float, target_delta: float, support_bound: float = 1.0
 ) -> int:
   """The minimum number of samples needed to calibrate to target_delta.
-
-  While for practical values of delta this method is stable, for very small
-  target_delta (or base_delta very close to target_delta) this may binary search
-  over a number of samples that results in errors due to floats having a maximum
-  representable value.
 
   Args:
     base_delta: The base_delta such that we use Monte Carlo verification to
@@ -212,46 +225,75 @@ def minimum_samples_to_calibrate(
   Returns:
     The minimum number of samples needed to calibrate to target_delta.
   """
+  num_samples = minimum_samples_per_verification(
+      base_delta, target_delta, [support_bound]
+  )
+  return int(num_samples[0])
+
+
+def minimum_samples_per_verification(
+    base_delta: float, target_delta: float, support_bounds: Sequence[float]
+) -> np.ndarray:
+  """The numbers of samples per verification needed to calibrate.
+
+  This is :func:`minimum_samples_to_calibrate` for verifications with different
+  support bounds: the returned numbers of samples minimize their total subject
+  to :func:`get_overall_delta` being at most ``target_delta``.
+
+  Args:
+    base_delta: The base_delta such that we use Monte Carlo verification to
+      check if each mechanism satisfies (epsilon, base_delta)-DP.
+    target_delta: The value such that we want to report the overall mechanism of
+      Monte Carlo verification and then running the best verified mechanism is
+      (epsilon, target_delta)-DP.
+    support_bounds: An upper bound on each (weighted) sample of the hockey-stick
+      divergence, for each verification. See :func:`get_overall_delta`.
+
+  Returns:
+    The number of samples for each verification.
+  """
   _validate.in_range(
       0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
   )
   if target_delta <= base_delta:
     raise ValueError('target_delta must be > base_delta.')
-  _validate_support_bound(support_bound, target_delta)
-  # The required number of samples scales like support_bound / target_delta.
-  lower_bound = int(support_bound // target_delta)
-  upper_bound = 2 * lower_bound
+  _validate_support_bound(support_bounds, target_delta)
+  support_bounds = np.asarray(support_bounds, dtype=float)
+  max_support_bound = np.max(support_bounds)
 
-  # There are some stability issues in going back-and-forth between base_delta
-  # and target_delta, so to be conservative we enforce both that we have a valid
-  # base_delta and that we achieve the target_delta.
-  def _enough_samples(num_samples):
-    try:
-      get_base_delta(num_samples, target_delta, support_bound)
-      overall_delta = get_overall_delta(num_samples, base_delta, support_bound)
-      return overall_delta <= target_delta
-    except ValueError:
-      return False
+  def samples_from_tau(tau):
+    # Solving the bound of get_overall_delta for the largest acceptable
+    # probability q of a wrong verification, each verification needs
+    # ln(1 / q) / KL samples for the KL-Hoeffding bound to reach q.
+    threshold = tau * base_delta
+    q = (target_delta - threshold) / (max_support_bound - threshold)
+    rescaled_delta = base_delta / support_bounds
+    kl = _kl(rescaled_delta, np.minimum(tau * rescaled_delta, 1.0))
+    with np.errstate(divide='ignore'):
+      return -np.log(q) / kl
 
-  while not _enough_samples(upper_bound):
-    lower_bound, upper_bound = 2 * lower_bound, 2 * upper_bound
-  while lower_bound < upper_bound - 1:
-    mid = (lower_bound + upper_bound) // 2
-    if _enough_samples(mid):
-      upper_bound = mid
-    else:
-      lower_bound = mid
-
-  # Due to precision issues, upper_bound might be slightly too small. We fix it
-  # post-hoc by increasing it by 1 until it achieves the target_delta and also
-  # we have enough samples to find a valid base_delta.
-  while not _enough_samples(upper_bound):
-    upper_bound += 1
-  return upper_bound
+  # The sample counts blow up at both ends: at tau = 1 the KL vanishes and at
+  # tau = target_delta / base_delta no wrong verification can be tolerated.
+  best_tau = scipy.optimize.minimize_scalar(
+      lambda tau: np.sum(samples_from_tau(tau)),
+      bounds=(1, target_delta / base_delta),
+      method='bounded',
+  ).x
+  # A small margin absorbs the numerical optimization here and in
+  # get_overall_delta; the loop is a safeguard that should not trigger.
+  margin = 1 + 1e-6
+  num_samples = np.ceil(samples_from_tau(best_tau) * margin).astype(int)
+  while (
+      get_overall_delta(num_samples, base_delta, support_bounds) > target_delta
+  ):
+    num_samples = np.ceil(num_samples * margin).astype(int)
+  return num_samples
 
 
 def get_base_delta(
-    num_samples: int, target_delta: float, support_bound: float = 1.0
+    num_samples: npt.ArrayLike,
+    target_delta: float,
+    support_bound: npt.ArrayLike = 1.0,
 ) -> float:
   """The base_delta for Monte Carlo verification to achieve target_delta.
 
@@ -266,18 +308,18 @@ def get_base_delta(
   practice), a tighter bound is possible.
 
   Args:
-    num_samples: The number of samples used in Monte Carlo verification.
+    num_samples: The number of samples used in each Monte Carlo verification.
     target_delta: The value such that we want to report the overall mechanism of
       Monte Carlo verification and then running the best verified mechanism is
       (epsilon, target_delta)-DP.
     support_bound: An upper bound on each (weighted) sample of the hockey-stick
-      divergence. See :func:`get_overall_delta`.
+      divergence, for each verification. See :func:`get_overall_delta`.
 
   Returns:
     The base_delta such that we use Monte Carlo verification to check if each
     mechanism satisfies (epsilon, base_delta)-DP.
   """
-  _validate.positive(num_samples=num_samples)
+  _validate_num_samples(num_samples)
   _validate.in_range(0, 1, closed='right', target_delta=target_delta)
   _validate_support_bound(support_bound, target_delta)
 
@@ -457,12 +499,12 @@ def perform_calibration_from_samples(
   all_samples = [
       s for s in [*positive_samples, *negative_samples] if s is not None
   ]
-  # TODO: Support a per-hyperparameter number of samples and
-  # support bound, with a corresponding per-hyperparameter base_delta, rather
-  # than conservatively using the minimum and maximum across hyperparameters.
-  min_sample_count = min(s.num_samples for s in all_samples)
-  support_bound = max(s.support_bound for s in all_samples)
-  base_delta = get_base_delta(min_sample_count, delta, support_bound)
+  # TODO: Support a per-hyperparameter base_delta.
+  base_delta = get_base_delta(
+      [s.num_samples for s in all_samples],
+      delta,
+      [s.support_bound for s in all_samples],
+  )
 
   def _passes(i: int) -> bool:
     positive_delta = delta_from_epsilon_and_samples(

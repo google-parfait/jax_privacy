@@ -32,6 +32,12 @@ def _samples(
   return [_PrivacyLossSamples(p, c) for p, c in zip(privacy_loss, counts)]
 
 
+def _slightly_fewer(num_samples):
+  """One sample fewer, or 0.001% fewer for large counts."""
+  # minimum_samples_to_calibrate is minimal up to a margin of that size.
+  return np.minimum(num_samples - 1, np.floor(num_samples * (1 - 1e-5)))
+
+
 def _point_mass(
     privacy_loss, count=1000, log_weight=None, support_bound=1.0
 ) -> delta_calculation.PrivacyLossSamples:
@@ -150,18 +156,12 @@ class DeltaCalculationTest(parameterized.TestCase):
         delta_calculation.get_base_delta(num_samples, target_delta),
         base_delta / 1.001,
     )
-    # Make sure that using one less sample fails.
-    try:
-      delta_calculation.get_base_delta(num_samples - 1, target_delta)
-      # If base_delta was achievable, then 1 fewer sample should not be enough
-      # to achieve the target delta.
-      self.assertGreater(
-          delta_calculation.get_overall_delta(num_samples - 1, base_delta),
-          target_delta,
-      )
-    except ValueError:
-      # One fewer sample failed, as expected.
-      pass
+    self.assertGreater(
+        delta_calculation.get_overall_delta(
+            _slightly_fewer(num_samples), base_delta
+        ),
+        target_delta,
+    )
 
   @parameterized.parameters(
       # Rescaling delta and support_bound together leaves the bound unchanged.
@@ -221,11 +221,13 @@ class DeltaCalculationTest(parameterized.TestCase):
     num_samples = delta_calculation.minimum_samples_to_calibrate(
         base_delta, delta, support_bound
     )
-    self.assertEqual(
-        num_samples,
-        delta_calculation.minimum_samples_to_calibrate(
+    self.assertAlmostEqual(
+        num_samples
+        / delta_calculation.minimum_samples_to_calibrate(
             base_delta / support_bound, delta / support_bound
         ),
+        1.0,
+        delta=1e-5,
     )
     self.assertAlmostEqual(
         delta_calculation.get_overall_delta(
@@ -282,24 +284,80 @@ class DeltaCalculationTest(parameterized.TestCase):
         ),
         target_delta,
     )
-    try:
-      delta_calculation.get_base_delta(
-          num_samples - 1, target_delta, support_bound
-      )
-      self.assertGreater(
-          delta_calculation.get_overall_delta(
-              num_samples - 1, base_delta, support_bound
-          ),
-          target_delta,
-      )
-    except ValueError:
-      pass
+    self.assertGreater(
+        delta_calculation.get_overall_delta(
+            _slightly_fewer(num_samples), base_delta, support_bound
+        ),
+        target_delta,
+    )
     self.assertLess(
         num_samples,
         delta_calculation.minimum_samples_to_calibrate(
             base_delta, target_delta
         ),
     )
+
+  def test_overall_delta_per_verifier_matches_scalar_for_equal_entries(self):
+    self.assertEqual(
+        delta_calculation.get_overall_delta([1000, 1000], 1e-3, [0.5, 0.5]),
+        delta_calculation.get_overall_delta(1000, 1e-3, 0.5),
+    )
+
+  def test_overall_delta_per_verifier_is_between_best_and_worst(self):
+    # Per-verifier accounting is at least as good as treating every verifier as
+    # the worst one, and no better than the worst verifier's own bound, since
+    # the failure probability is dominated by the verifier with fewest samples
+    # relative to its support bound.
+    base_delta = 1e-3
+    num_samples, support_bounds = [100_000, 2_000], [1.0, 0.02]
+    per_verifier = delta_calculation.get_overall_delta(
+        num_samples, base_delta, support_bounds
+    )
+    worst_case = delta_calculation.get_overall_delta(
+        min(num_samples), base_delta, max(support_bounds)
+    )
+    self.assertLess(per_verifier, worst_case)
+    for n, b in zip(num_samples, support_bounds):
+      self.assertGreaterEqual(
+          per_verifier, delta_calculation.get_overall_delta(n, base_delta, b)
+      )
+
+  @parameterized.product(
+      target_delta=[1e-3, 1e-6, 1e-9],
+      support_bounds=[[1.0, 0.5], [1.0, 0.1, 0.01], [0.3, 0.03]],
+  )
+  def test_minimum_samples_to_calibrate_per_verifier(
+      self, target_delta, support_bounds
+  ):
+    base_delta = target_delta / 2
+    num_samples = delta_calculation.minimum_samples_per_verification(
+        base_delta, target_delta, support_bounds
+    )
+    self.assertEqual(num_samples.shape, (len(support_bounds),))
+    self.assertLessEqual(
+        delta_calculation.get_overall_delta(
+            num_samples, base_delta, support_bounds
+        ),
+        target_delta,
+    )
+    # Sample counts scale with the support bound, up to the shared log factor.
+    ratios = num_samples / np.asarray(support_bounds)
+    self.assertLess(ratios.max() / ratios.min(), 1.5)
+    # Slightly fewer samples for every verifier breaks the target.
+    self.assertGreater(
+        delta_calculation.get_overall_delta(
+            _slightly_fewer(num_samples), base_delta, support_bounds
+        ),
+        target_delta,
+    )
+    # No verifier needs (materially) more samples than if all had the worst
+    # support bound: tau is shared, so the worst verifier may be a few samples
+    # off its own optimum. The ones with small support bounds need far fewer.
+    worst_case = delta_calculation.minimum_samples_to_calibrate(
+        base_delta, target_delta, max(support_bounds)
+    )
+    self.assertLessEqual(num_samples.max(), worst_case * (1 + 1e-5))
+    self.assertLess(num_samples.min(), 0.75 * worst_case)
 
   @parameterized.named_parameters(
       ('all_at_most_epsilon', 3, [1, 2, 3], None, 0.0),
@@ -695,6 +753,22 @@ class DeltaCalculationTest(parameterized.TestCase):
         1.0, 0.1, **kwargs
     )
     self.assertEqual(result, expected_result)
+
+  def test_perform_calibration_accounts_per_verification(self):
+    # 200 samples suffice with support bound 0.01 but not with support bound 1,
+    # so this only passes because each verification uses its own bound.
+    target_delta = 1e-3
+    with self.assertRaises(ValueError):
+      delta_calculation.get_base_delta(200, target_delta, 1.0)
+    result = delta_calculation.perform_calibration_from_samples(
+        1.0,
+        target_delta,
+        positive_samples=[
+            _point_mass(1, count=200, support_bound=0.01),
+            _point_mass(1, count=20_000),
+        ],
+    )
+    self.assertEqual(result, (True, 1))
 
   @parameterized.named_parameters(
       ('negative_samples_length', dict(negative_samples=[_point_mass(1)])),
