@@ -853,6 +853,34 @@ class ClosedFormsTest(parameterized.TestCase):
     )
 
   @hypothesis.given(
+      a=st.floats(0.1, 10.0),
+      magnitude=st.floats(1.001, 5.0),
+      negative=st.booleans(),
+      n=st.integers(1, 40),
+  )
+  # theta_j * theta_k for a buf_decay of -1.5, which arises in max_error:
+  @hypothesis.example(a=1.0, magnitude=2.25, negative=False, n=20)
+  @hypothesis.example(a=1.0, magnitude=1.5, negative=True, n=20)
+  def test_geometric_sum_ratio_magnitude_above_one(
+      self, a, magnitude, negative, n
+  ):
+    # The Taylor expansion used by geometric_sum is only valid in a
+    # neighborhood of r = 1, so |r| > 1 must fall back on the (exact) direct
+    # calculation. A one-sided threshold previously sent every r > 1 to the
+    # series approximation, silently returning a wildly incorrect value.
+    r = -magnitude if negative else magnitude
+    brute_force_grad = jax.value_and_grad(
+        lambda a, r, n: a * jnp.sum(r ** jnp.arange(0, n)), argnums=(0, 1)
+    )
+    grad_fn = jax.value_and_grad(
+        buffered_toeplitz.geometric_sum, argnums=(0, 1)
+    )
+    v1, g1 = brute_force_grad(a, r, n)
+    v2, g2 = grad_fn(a, r, n)
+    assert_allclose(v1, v2, rtol=1e-9, err_msg='Values are not equal.')
+    assert_allclose(g1, g2, rtol=1e-7, err_msg='Gradients are not equal.')
+
+  @hypothesis.given(
       a=st.floats(0.0, 1e6), r=st.floats(0.0, 1.0), n=st.integers(1, 100)
   )
   @hypothesis.example(a=1.0, r=1.0, n=1)
@@ -1016,6 +1044,29 @@ class ClosedFormsTest(parameterized.TestCase):
     limit_loss = n * buffered_toeplitz.limit_max_loss(blt)
     if jnp.isfinite(limit_loss):
       self.assertLessEqual(limit_loss, loss + 1e-10)
+
+  @parameterized.parameters(8, 32, 128)
+  def test_max_loss_when_noising_blt_oscillates(self, n):
+    # A strategy BLT with buf_decay in (0, 1) and output_scale > 0 passes every
+    # guard on max_loss, yet its inverse (the noising matrix C^{-1}) can have a
+    # buf_decay below -1 (here -1.5), so theta_j * theta_k > 1. Such BLTs lie
+    # outside the class optimize() produces, but max_loss is public and must
+    # not silently return a wrong value for them: it previously returned a
+    # negative "squared error" for this BLT.
+    blt = make_blt([0.5], [2.0])
+    self.assertLess(blt.inverse().buf_decay[0], -1.0)
+
+    loss = buffered_toeplitz.max_loss(blt, n)
+    expected = toeplitz.loss(
+        strategy_coef=blt.toeplitz_coefs(n), reduction_fn=jnp.max
+    )
+    self.assertGreater(loss, 0.0)
+    assert_allclose(
+        loss,
+        expected,
+        rtol=1e-9,
+        err_msg='max_loss does not match direct calculation',
+    )
 
   @hypothesis.given(blt_tuple=st.sampled_from(BLT_TUPLES), n=st.integers(1, 50))
   def test_max_iter_loss_gradients(self, blt_tuple, n):
