@@ -20,10 +20,11 @@ based on attack scores of held-in and held-out canaries
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from concurrent import futures
 import dataclasses
 import functools
-from typing import Callable, TypeAlias
+from typing import Any, TypeAlias, overload
 
 import dp_accounting
 import numpy as np
@@ -94,6 +95,9 @@ class MultiSplit(ThresholdStrategy):
   threshold_estimation_frac: float = 0.5
   seed: int | None = None
 
+
+_ScalarFloat: TypeAlias = float | np.floating[Any] | np.integer[Any]
+_ArrayFloat: TypeAlias = Sequence[_ScalarFloat] | np.ndarray
 
 AuditAllThresholdsMethod: TypeAlias = Callable[
     [
@@ -263,21 +267,26 @@ class BootstrapParams:
 
   Attributes:
     num_samples: The number of times to resample the canary scores.
-    quantiles: An array-like of quantiles to report. E.g., for a 95% confidence
-      interval, use (0.025, 0.975).
+    quantiles: A 1-D sequence or array of quantiles to report. E.g., for a 95%
+      confidence interval, use (0.025, 0.975).
     bias_correction: Whether to use bias correction.
     acceleration: Whether to use acceleration.
     seed: The seed for the random number generator.
   """
 
   num_samples: int = 1000
-  quantiles: np.typing.ArrayLike = (0.025, 0.975)
+  quantiles: Sequence[float] | np.ndarray = (0.025, 0.975)
   bias_correction: bool = True
   acceleration: bool = False
   seed: int | None = None
 
   def __post_init__(self):
     quantile_arr = np.asarray(self.quantiles)
+    if quantile_arr.ndim != 1:
+      raise ValueError(
+          'quantiles must be a 1-D sequence (e.g., (0.95,)), got'
+          f' {self.quantiles} with shape {quantile_arr.shape}.'
+      )
     if quantile_arr.size == 0:
       raise ValueError('quantiles cannot be empty.')
     if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
@@ -318,7 +327,7 @@ def _log_sub(x, y):
 
 
 def _clopper_pearson_upper(
-    k: int | np.ndarray, n: int, significance: float
+    k: int | np.ndarray, n: int | np.ndarray, significance: float
 ) -> np.ndarray:
   """Computes Clopper-Pearson one-sided upper binomial confidence interval.
 
@@ -433,7 +442,7 @@ def _tpr_at_given_fpr(
     fpr: np.typing.ArrayLike,
     tp_counts: np.ndarray,
     fp_counts: np.ndarray,
-) -> np.ndarray | float:
+) -> np.ndarray:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
 
@@ -525,10 +534,9 @@ class CanaryScoreAuditor:
     >>> in_canary_scores = np.arange(100) + 9.5
     >>> auditor = CanaryScoreAuditor(in_canary_scores, out_canary_scores)
     >>> tpr_at_low_fpr = auditor.tpr_at_given_fpr(0.01)
-    >>> float(round(tpr_at_low_fpr, 2))
+    >>> round(tpr_at_low_fpr, 2)
     0.11
-    >>> auroc = auditor.attack_auroc()
-    >>> float(auroc)
+    >>> auditor.attack_auroc()
     0.595
   """
 
@@ -612,7 +620,7 @@ class CanaryScoreAuditor:
       return fn(CanaryScoreAuditor(in_samples, out_samples))
 
     with futures.ThreadPoolExecutor() as pool:
-      values = list(pool.map(get_value, seeds))
+      values = np.fromiter(pool.map(get_value, seeds), dtype=float)
 
     if not params.bias_correction:
       return np.quantile(values, params.quantiles, method='linear')
@@ -731,6 +739,28 @@ class CanaryScoreAuditor:
         one_sided,
     )
 
+  @overload
+  def epsilon_raw_counts(
+      self,
+      min_count: int = 50,
+      delta: float = 0,
+      one_sided: bool = True,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def epsilon_raw_counts(
+      self,
+      min_count: int = 50,
+      delta: float = 0,
+      one_sided: bool = True,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
+
   def epsilon_raw_counts(
       self,
       min_count: int = 50,
@@ -782,7 +812,34 @@ class CanaryScoreAuditor:
       )
       eps = max(eps, eps_reverse)
 
-    return max(eps, 0)
+    return float(max(eps, 0.0))
+
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ScalarFloat,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ScalarFloat,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
+
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ArrayFloat,
+      *,
+      bootstrap_params: None = None,
+  ) -> np.ndarray:
+    ...
 
   def tpr_at_given_fpr(
       self,
@@ -812,12 +869,30 @@ class CanaryScoreAuditor:
         raise ValueError(
             f'fpr must be a scalar for bootstrap, got shape {fpr.shape}.'
         )
+      scalar_fpr = float(fpr)
       return self._bootstrap(
-          lambda auditor: auditor.tpr_at_given_fpr(fpr),
+          lambda auditor: auditor.tpr_at_given_fpr(scalar_fpr),
           bootstrap_params,
       )
 
-    return _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
+    tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
+    return float(tpr) if fpr.ndim == 0 else tpr
+
+  @overload
+  def attack_auroc(
+      self,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def attack_auroc(
+      self,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
 
   def attack_auroc(
       self,
@@ -842,7 +917,7 @@ class CanaryScoreAuditor:
     # as a function of FNR, which is equivalent.
     tnr = self._tn_counts / self._tn_counts[-1]
     fnr = self._fn_counts / self._fn_counts[-1]
-    return 0.5 * np.dot(tnr[:-1] + tnr[1:], fnr[1:] - fnr[:-1])
+    return float(0.5 * np.dot(tnr[:-1] + tnr[1:], fnr[1:] - fnr[:-1]))
 
   def max_accuracy(
       self,
@@ -877,7 +952,7 @@ class CanaryScoreAuditor:
       tnr_ubs = _clopper_pearson_upper(self._tn_counts, n_neg, significance / 2)
       tpr_ubs = _clopper_pearson_upper(tp_counts, n_pos, significance / 2)
 
-    return np.max(tpr_ubs * prevalence + tnr_ubs * (1 - prevalence))
+    return float(np.max(tpr_ubs * prevalence + tnr_ubs * (1 - prevalence)))
 
   def epsilon_from_gdp(
       self,
@@ -923,13 +998,13 @@ class CanaryScoreAuditor:
     # Filter any thresholds where TNR or TPR is too small.
     bounds = bounds[np.max(bounds, axis=1) < 1 - delta]
     if not bounds.size:
-      return 0
+      return 0.0
 
     # Eq. 6 in https://arxiv.org/abs/1905.02383 gives the forward-rule bound
     # mu >= isf(FPR) - ppf(FNR). Negative values are no evidence, so clamp to 0.
     max_mu = np.max(_norm.isf(bounds[:, 0]) - _norm.ppf(bounds[:, 1]))
     if max_mu <= 0:
-      return 0
+      return 0.0
 
     # Conversion of GDP to (eps, delta)-DP. Corollary 2.13 in
     # https://arxiv.org/abs/1905.02383, in the log domain for stability.
@@ -939,13 +1014,13 @@ class CanaryScoreAuditor:
           eps + _norm.logcdf(-(eps / max_mu) - max_mu / 2),
       ) - np.log(delta)
 
-    eps_lb, eps_ub = 0, 100
+    eps_lb, eps_ub = 0.0, 100.0
     if delta_gap(eps_lb) <= 0:
       return eps_lb
     if delta_gap(eps_ub) >= 0:
       return eps_ub
 
-    return scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol)
+    return float(scipy.optimize.brentq(delta_gap, eps_lb, eps_ub, xtol=eps_tol))
 
   def _epsilon_one_run_all_thresholds(
       self,
@@ -1153,4 +1228,4 @@ class CanaryScoreAuditor:
             f'Unsupported threshold strategy: {threshold_strategy}.'
         )
 
-    return eps
+    return float(eps)
