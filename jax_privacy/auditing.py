@@ -24,7 +24,7 @@ from collections.abc import Callable, Sequence
 from concurrent import futures
 import dataclasses
 import functools
-from typing import TypeAlias
+from typing import Any, TypeAlias, overload
 
 import dp_accounting
 import numpy as np
@@ -95,6 +95,9 @@ class MultiSplit(ThresholdStrategy):
   threshold_estimation_frac: float = 0.5
   seed: int | None = None
 
+
+_ScalarFloat: TypeAlias = float | np.floating[Any] | np.integer[Any]
+_ArrayFloat: TypeAlias = Sequence[_ScalarFloat] | np.ndarray
 
 AuditAllThresholdsMethod: TypeAlias = Callable[
     [
@@ -324,13 +327,13 @@ def _log_sub(x, y):
 
 
 def _clopper_pearson_upper(
-    k: int | np.ndarray, n: int, significance: float
+    k: np.typing.ArrayLike, n: np.typing.ArrayLike, significance: float
 ) -> np.ndarray:
   """Computes Clopper-Pearson one-sided upper binomial confidence interval.
 
   Args:
-    k: The number of successes.
-    n: The number of trials.
+    k: The number of successes. Broadcasts against ``n``.
+    n: The number of trials. Broadcasts against ``k``.
     significance: Allowed probability of failure (one minus confidence).
 
   Returns:
@@ -439,7 +442,7 @@ def _tpr_at_given_fpr(
     fpr: np.typing.ArrayLike,
     tp_counts: np.ndarray,
     fp_counts: np.ndarray,
-) -> np.ndarray | float:
+) -> np.ndarray:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
 
@@ -736,6 +739,28 @@ class CanaryScoreAuditor:
         one_sided,
     )
 
+  @overload
+  def epsilon_raw_counts(
+      self,
+      min_count: int = 50,
+      delta: float = 0,
+      one_sided: bool = True,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def epsilon_raw_counts(
+      self,
+      min_count: int = 50,
+      delta: float = 0,
+      one_sided: bool = True,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
+
   def epsilon_raw_counts(
       self,
       min_count: int = 50,
@@ -789,6 +814,33 @@ class CanaryScoreAuditor:
 
     return float(max(eps, 0.0))
 
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ScalarFloat,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ScalarFloat,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
+
+  @overload
+  def tpr_at_given_fpr(
+      self,
+      fpr: _ArrayFloat,
+      *,
+      bootstrap_params: None = None,
+  ) -> np.ndarray:
+    ...
+
   def tpr_at_given_fpr(
       self,
       fpr: np.typing.ArrayLike,
@@ -817,13 +869,30 @@ class CanaryScoreAuditor:
         raise ValueError(
             f'fpr must be a scalar for bootstrap, got shape {fpr.shape}.'
         )
+      scalar_fpr = float(fpr)
       return self._bootstrap(
-          lambda auditor: auditor.tpr_at_given_fpr(fpr),
+          lambda auditor: auditor.tpr_at_given_fpr(scalar_fpr),
           bootstrap_params,
       )
 
     tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
     return float(tpr) if fpr.ndim == 0 else tpr
+
+  @overload
+  def attack_auroc(
+      self,
+      *,
+      bootstrap_params: None = None,
+  ) -> float:
+    ...
+
+  @overload
+  def attack_auroc(
+      self,
+      *,
+      bootstrap_params: BootstrapParams,
+  ) -> np.ndarray:
+    ...
 
   def attack_auroc(
       self,

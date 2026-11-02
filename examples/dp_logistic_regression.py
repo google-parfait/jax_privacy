@@ -209,16 +209,10 @@ def main(_):
 
   # 99% upper confidence interval
   quantile_99 = auditing.BootstrapParams(quantiles=(0.99,))
-  estimated_epsilon_99 = float(
-      np.asarray(
-          auditor.epsilon_raw_counts(
-              min_count=10, delta=DELTA, bootstrap_params=quantile_99
-          )
-      )[0]
-  )
-  auroc_99 = float(
-      np.asarray(auditor.attack_auroc(bootstrap_params=quantile_99))[0]
-  )
+  estimated_epsilon_99 = auditor.epsilon_raw_counts(
+      min_count=10, delta=DELTA, bootstrap_params=quantile_99
+  )[0]
+  auroc_99 = auditor.attack_auroc(bootstrap_params=quantile_99)[0]
 
   print(f'Audited with {audit_users} held-in/held-out canaries.')
   print(f'Theoretical Epsilon: {EPSILON:.2f}')
