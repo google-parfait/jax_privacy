@@ -14,6 +14,7 @@
 
 import itertools
 import typing
+import warnings
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -652,7 +653,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         acceleration=(bootstrap_type == 'acceleration'),
         seed=0xBAD5EED,
     )
-    interval = auditor._bootstrap(mean_score, bootstrap_params)
+    interval = auditor.bootstrap(mean_score, bootstrap_params)
     all_scores = np.concatenate([in_canary_scores, out_canary_scores])
     mu_hat, sigma_hat = np.mean(all_scores), np.std(all_scores)
     expected_interval = auditing._norm.ppf(
@@ -668,23 +669,25 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     bootstrap_params = auditing.BootstrapParams()
     fpr = [0.1, 0.2]
-    with self.assertRaisesRegex(
-        ValueError, 'fpr must be a scalar for bootstrap'
-    ):
-      auditor.tpr_at_given_fpr(fpr, bootstrap_params=bootstrap_params)
+    with warnings.catch_warnings():
+      warnings.simplefilter('ignore', DeprecationWarning)
+      with self.assertRaisesRegex(
+          ValueError, 'fpr must be a scalar for bootstrap'
+      ):
+        auditor.tpr_at_given_fpr(fpr, bootstrap_params=bootstrap_params)
 
   @parameterized.product(
-      metric_and_args=(
-          ('epsilon_raw_counts', ()),
-          ('tpr_at_given_fpr', (0.1,)),
-          ('attack_auroc', ()),
+      metric_fn=(
+          lambda a: a.epsilon_raw_counts(),
+          lambda a: a.tpr_at_given_fpr(0.1),
+          auditing.CanaryScoreAuditor.attack_auroc,
+          auditing.CanaryScoreAuditor.max_accuracy,
       ),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
       mu=(0, 1, 10),
   )
-  def test_auditing_metric_bootstrap(self, metric_and_args, bootstrap_type, mu):
+  def test_bootstrap_auditing_metric(self, metric_fn, bootstrap_type, mu):
     # Test that bootstrapped metrics run and return basically reasonable values.
-    metric_fn_name, args = metric_and_args
     rng = np.random.default_rng(seed=0xBAD5EED)
     in_canary_scores = rng.normal(mu, size=356)
     out_canary_scores = rng.normal(size=432)
@@ -694,11 +697,33 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         acceleration=(bootstrap_type == 'acceleration'),
         seed=0xBAD5EED,
     )
-    metric_fn = getattr(auditor, metric_fn_name)
-    value = metric_fn(*args)
-    interval = metric_fn(*args, bootstrap_params=bootstrap_params)
+    value = metric_fn(auditor)
+    interval = auditor.bootstrap(metric_fn, bootstrap_params)
+    self.assertIsInstance(interval, tuple)
     self.assertLen(interval, 2)
+    for bound in interval:
+      self.assertIsInstance(bound, float)
     self.assertBetween(value, *interval)
+
+  @parameterized.parameters(
+      ('epsilon_raw_counts', ()),
+      ('tpr_at_given_fpr', (0.1,)),
+      ('attack_auroc', ()),
+  )
+  def test_bootstrap_params_kwarg_is_deprecated(self, metric_fn_name, args):
+    rng = np.random.default_rng(seed=0xBAD5EED)
+    auditor = auditing.CanaryScoreAuditor(
+        rng.normal(1, size=356), rng.normal(size=432)
+    )
+    bootstrap_params = auditing.BootstrapParams(seed=0xBAD5EED)
+    metric_fn = getattr(auditor, metric_fn_name)
+    with self.assertWarnsRegex(DeprecationWarning, 'Use .*bootstrap'):
+      interval = metric_fn(*args, bootstrap_params=bootstrap_params)
+    self.assertIsInstance(interval, np.ndarray)
+    expected = auditor.bootstrap(
+        lambda a: getattr(a, metric_fn_name)(*args), bootstrap_params
+    )
+    np.testing.assert_array_equal(interval, expected)
 
   @parameterized.named_parameters(
       ('significance_zero', {'significance': 0.0}, 'significance'),

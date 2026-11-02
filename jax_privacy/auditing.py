@@ -25,6 +25,7 @@ from concurrent import futures
 import dataclasses
 import functools
 from typing import Any, TypeAlias, overload
+import warnings
 
 import dp_accounting
 import numpy as np
@@ -504,6 +505,17 @@ def _epsilon_raw_counts_helper(
   return np.max(eps, initial=initial_eps)
 
 
+def _warn_bootstrap_params_deprecated(method_name: str) -> None:
+  warnings.warn(
+      f'The `bootstrap_params` argument of `CanaryScoreAuditor.{method_name}`'
+      ' is deprecated and will be removed in a future release. Use'
+      ' `CanaryScoreAuditor.bootstrap` instead, e.g.'
+      f' `auditor.bootstrap(lambda a: a.{method_name}(...), params)`.',
+      DeprecationWarning,
+      stacklevel=3,
+  )
+
+
 def _random_partition(
     scores: np.ndarray,
     rng: np.random.Generator,
@@ -538,6 +550,14 @@ class CanaryScoreAuditor:
     0.11
     >>> auditor.attack_auroc()
     0.595
+
+  Any scalar metric can be bootstrapped with :meth:`bootstrap`, which resamples
+  the canary scores and returns the requested quantiles of the metric:
+
+    >>> ci = BootstrapParams.confidence_interval(confidence=0.9, seed=0)
+    >>> lo, hi = auditor.bootstrap(CanaryScoreAuditor.attack_auroc, ci)
+    >>> bool(lo <= 0.595 <= hi)
+    True
   """
 
   def __init__(
@@ -592,19 +612,39 @@ class CanaryScoreAuditor:
     # Reverse the order so they are increasing.
     return (self._tn_counts[-1] - self._tn_counts)[::-1]
 
-  def _bootstrap(
+  def bootstrap(
       self,
-      fn: Callable[['CanaryScoreAuditor'], float],
+      fn: Callable[[CanaryScoreAuditor], float],
       params: BootstrapParams,
-  ) -> np.ndarray:
-    """Computes bootstrapped quantiles for a function, optionally applying BCa.
+  ) -> tuple[float, ...]:
+    """Computes bootstrapped quantiles of a scalar metric.
+
+    The held-in and held-out canary scores are resampled with replacement
+    ``params.num_samples`` times, ``fn`` is evaluated on an auditor built from
+    each resample, and the requested quantiles of the resulting empirical
+    distribution are returned, optionally with bias correction and acceleration
+    (BCa). See :class:`BootstrapParams` for details.
+
+    Note that the result should not be interpreted as a formal confidence
+    interval on the true privacy metric, merely a confidence interval of the
+    estimate.
+
+    Example:
+      >>> auditor = CanaryScoreAuditor(np.arange(100) + 9.5, np.arange(100))
+      >>> params = BootstrapParams(quantiles=(0.05, 0.95), seed=0)
+      >>> lo, hi = auditor.bootstrap(
+      ...     lambda a: a.epsilon_raw_counts(min_count=10), params
+      ... )
 
     Args:
-      fn: A function of a CanaryScoreAuditor returning a scalar.
+      fn: A function of a ``CanaryScoreAuditor`` returning a scalar, e.g.
+        ``CanaryScoreAuditor.attack_auroc`` or ``lambda a:
+        a.tpr_at_given_fpr(0.01)``.
       params: The parameters for the bootstrap.
 
     Returns:
-      An array of bootstrapped quantiles.
+      The bootstrapped quantiles of ``fn`` as a tuple of Python floats, one per
+      entry of ``params.quantiles``.
     """
     rng = np.random.default_rng(seed=params.seed)
     seeds = rng.integers(np.iinfo(np.int64).max, size=params.num_samples)
@@ -622,41 +662,42 @@ class CanaryScoreAuditor:
     with futures.ThreadPoolExecutor() as pool:
       values = np.fromiter(pool.map(get_value, seeds), dtype=float)
 
-    if not params.bias_correction:
-      return np.quantile(values, params.quantiles, method='linear')
+    quantiles = np.asarray(params.quantiles)
+    if params.bias_correction:
+      full_estimate = fn(self)
+      # Use Laplace smoothing here to avoid computing ppf of 0 or 1.
+      prop_less = (np.sum(values < full_estimate) + 1) / (
+          params.num_samples + 2
+      )
+      z0 = _norm.ppf(prop_less)
 
-    full_estimate = fn(self)
-    # Use Laplace smoothing here to avoid computing ppf of 0 or 1.
-    prop_less = (np.sum(values < full_estimate) + 1) / (params.num_samples + 2)
-    z0 = _norm.ppf(prop_less)
+      if params.acceleration:
 
-    if params.acceleration:
+        def eval_delete_in(i):
+          return fn(CanaryScoreAuditor(np.delete(in_scores, i), out_scores))
 
-      def eval_delete_in(i):
-        return fn(CanaryScoreAuditor(np.delete(in_scores, i), out_scores))
+        def eval_delete_out(i):
+          return fn(CanaryScoreAuditor(in_scores, np.delete(out_scores, i)))
 
-      def eval_delete_out(i):
-        return fn(CanaryScoreAuditor(in_scores, np.delete(out_scores, i)))
+        with futures.ThreadPoolExecutor() as pool:
+          jackknife_estimates = list(
+              pool.map(eval_delete_in, range(len(in_scores)))
+          )
+          jackknife_estimates.extend(
+              pool.map(eval_delete_out, range(len(out_scores)))
+          )
+        jackknife_mean = np.mean(jackknife_estimates)
+        num = np.sum((jackknife_mean - jackknife_estimates) ** 3)
+        denom = 6 * (np.sum((jackknife_mean - jackknife_estimates) ** 2)) ** 1.5
+        accel = 0 if denom == 0 else num / denom
+      else:
+        accel = 0
 
-      with futures.ThreadPoolExecutor() as pool:
-        jackknife_estimates = list(
-            pool.map(eval_delete_in, range(len(in_scores)))
-        )
-        jackknife_estimates.extend(
-            pool.map(eval_delete_out, range(len(out_scores)))
-        )
-      jackknife_mean = np.mean(jackknife_estimates)
-      num = np.sum((jackknife_mean - jackknife_estimates) ** 3)
-      denom = 6 * (np.sum((jackknife_mean - jackknife_estimates) ** 2)) ** 1.5
-      accel = 0 if denom == 0 else num / denom
-    else:
-      accel = 0
+      num = z0 + _norm.ppf(quantiles)
+      denom = 1 - accel * num
+      quantiles = _norm.cdf(z0 + num / denom)
 
-    z_quantiles = _norm.ppf(params.quantiles)
-    num = z0 + z_quantiles
-    denom = 1 - accel * num
-    corrected_quantiles = _norm.cdf(z0 + num / denom)
-    return np.quantile(values, corrected_quantiles, method='linear')
+    return tuple(np.quantile(values, quantiles, method='linear').tolist())
 
   def _epsilon_clopper_pearson_all_thresholds(
       self,
@@ -780,10 +821,8 @@ class CanaryScoreAuditor:
       min_count: Only consider thresholds with this many TP/FP (TN/FN).
       delta: Approximate DP delta.
       one_sided: Whether to use only TPR/FPR (vs. max of TPR/FPR and TNR/FNR).
-      bootstrap_params: If provided, compute and return bootstrapped quantiles
-        of the estimate. Note that this should not be interpreted as a formal
-        confidence interval on the true epsilon, merely a confidence interval of
-        the estimate.
+      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
+        compute and return bootstrapped quantiles of the estimate.
 
     Returns:
       Epsilon estimate ln(TPR/FPR).
@@ -794,9 +833,12 @@ class CanaryScoreAuditor:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
 
     if bootstrap_params is not None:
-      return self._bootstrap(
-          lambda a: a.epsilon_raw_counts(min_count, delta, one_sided),
-          bootstrap_params,
+      _warn_bootstrap_params_deprecated('epsilon_raw_counts')
+      return np.asarray(
+          self.bootstrap(
+              lambda a: a.epsilon_raw_counts(min_count, delta, one_sided),
+              bootstrap_params,
+          )
       )
 
     eps = _epsilon_raw_counts_helper(
@@ -853,8 +895,9 @@ class CanaryScoreAuditor:
       fpr: The desired false positive rate. May be a scalar, or an array of
         independent FPR values, in which case an array of the same shape is
         returned with the TPR at each FPR.
-      bootstrap_params: If provided, compute and return bootstrapped quantiles
-        of the TPR. ``fpr`` must be a scalar in this case.
+      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
+        compute and return bootstrapped quantiles of the TPR. ``fpr`` must be a
+        scalar in this case.
 
     Returns:
       The maximum true positive rate at the given false positive rate,
@@ -865,14 +908,17 @@ class CanaryScoreAuditor:
       raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
 
     if bootstrap_params is not None:
+      _warn_bootstrap_params_deprecated('tpr_at_given_fpr')
       if fpr.ndim > 0:
         raise ValueError(
             f'fpr must be a scalar for bootstrap, got shape {fpr.shape}.'
         )
       scalar_fpr = float(fpr)
-      return self._bootstrap(
-          lambda auditor: auditor.tpr_at_given_fpr(scalar_fpr),
-          bootstrap_params,
+      return np.asarray(
+          self.bootstrap(
+              lambda auditor: auditor.tpr_at_given_fpr(scalar_fpr),
+              bootstrap_params,
+          )
       )
 
     tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
@@ -902,15 +948,18 @@ class CanaryScoreAuditor:
     """Computes the area under the ROC curve from the attack scores.
 
     Args:
-      bootstrap_params: If provided, compute and return bootstrapped quantiles
-        of the AUROC.
+      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
+        compute and return bootstrapped quantiles of the AUROC.
 
     Returns:
       The area under the ROC curve from the attack scores, allowing classifiers
       that randomize between two thresholds.
     """
     if bootstrap_params is not None:
-      return self._bootstrap(CanaryScoreAuditor.attack_auroc, bootstrap_params)
+      _warn_bootstrap_params_deprecated('attack_auroc')
+      return np.asarray(
+          self.bootstrap(CanaryScoreAuditor.attack_auroc, bootstrap_params)
+      )
 
     # Calculate AUROC using the trapezoidal rule. Since we have TN counts and FN
     # counts handy, we're actually computing the area under the curve of the TNR
