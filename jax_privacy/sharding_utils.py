@@ -30,15 +30,21 @@ Pillutla et al. (2025) <https://arxiv.org/abs/2506.08201>`_.
 """
 
 import math
-from typing import Any, Callable, TypeAlias
+from typing import Any, Callable, TypeAlias, TypeVar
 
 import jax
+from jax_privacy import optimizers
 import numpy as np
 import optax
 
 
 PyTree: TypeAlias = Any
 PartitionSpecPyTree: TypeAlias = Any
+TransformT = TypeVar(
+    'TransformT',
+    optax.GradientTransformation,
+    optimizers.AugmentedGradientTransformation,
+)
 
 
 def _check_explicit_mesh(mesh: jax.sharding.Mesh):
@@ -333,9 +339,9 @@ def _check_auto_mesh():
 
 
 def with_sharding_specs(
-    transform: optax.GradientTransformation,
+    transform: TransformT,
     param_specs: PartitionSpecPyTree,
-) -> optax.GradientTransformation:
+) -> TransformT:
   """Binds parameter PartitionSpecs to a transformation for Auto-axes meshes.
 
   Requires an active ``AxisType.Auto`` mesh set via :func:`jax.set_mesh`.
@@ -391,4 +397,4 @@ def with_sharding_specs(
 
     return jax.sharding.explicit_axes(_update, in_sharding=(specs,))(updates)
 
-  return optax.GradientTransformation(init_fn, update_fn)
+  return transform._replace(init=init_fn, update=update_fn)

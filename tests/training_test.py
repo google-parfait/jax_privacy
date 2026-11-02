@@ -30,6 +30,8 @@ from jax_privacy import training
 import numpy as np
 import optax
 
+jax.config.update('jax_num_cpu_devices', 2)
+
 
 def _quadratic_loss(params, batch, prng):
   """Per-example quadratic loss with has_aux=True convention."""
@@ -567,7 +569,7 @@ class DPTrainerTest(parameterized.TestCase):
 
   def test_fit_with_param_specs(self):
     """fit() works on an Auto mesh with ZERO strategy and param_specs."""
-    devices = np.array(jax.devices()[:1]).reshape((1, 1))
+    devices = np.array(jax.devices()).reshape((1, -1))
     mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
     param_spec = jax.sharding.PartitionSpec('model')
     param_sharding = jax.sharding.NamedSharding(mesh, param_spec)
@@ -599,7 +601,7 @@ class DPTrainerTest(parameterized.TestCase):
           config=config,
           performance_flags=flags,
           loss_fn=loss_with_closed_over_base,
-          optimizer=optax.sgd(0.01),
+          optimizer=optax.adamw(0.01),
           compilation_strategy=training.PadToMultiple(multiple=4),
       )
       state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)

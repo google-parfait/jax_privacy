@@ -59,6 +59,7 @@ from jax_privacy import _validate
 from jax_privacy import auditing
 from jax_privacy import execution_plan
 from jax_privacy import optimizers as aug_optimizers
+from jax_privacy import sharding_utils
 import numpy as np
 import optax
 from optax import microbatching
@@ -213,6 +214,8 @@ class DPTrainer:
   def init(self, params: Params) -> TrainingState:
     """Initialize a ``TrainingState`` at step 0."""
     optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
+    if (specs := self.performance_flags.param_specs) is not None:
+      optimizer = sharding_utils.with_sharding_specs(optimizer, specs)
     # jax_privacy will sometimes upcast gradients to a higher dtype for
     # numerical stability, regardless of the dtype of params.
     grads_like = optax.tree.cast(params, self.performance_flags.dtype)
