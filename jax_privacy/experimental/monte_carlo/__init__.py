@@ -20,5 +20,6 @@
 
    delta_calculation
    importance_sampling
+   jax_sample_generation
    sample_generation
 """
