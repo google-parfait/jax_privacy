@@ -242,7 +242,9 @@ def multiply_streaming_matrices(
   """
 
   def init_multiply(abstract_value):
-    return A.init_multiply(abstract_value), B.init_multiply(abstract_value)
+    B_state = B.init_multiply(abstract_value)
+    intermediate, _ = jax.eval_shape(B.multiply_next, abstract_value, B_state)
+    return A.init_multiply(intermediate), B_state
 
   def multiply_next(value, state):
     A_state, B_state = state
