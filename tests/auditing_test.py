@@ -74,6 +74,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'quantiles cannot be empty'):
       auditing.BootstrapParams(quantiles=[])
 
+  @parameterized.named_parameters(
+      ('scalar', 0.5),
+      ('2d', [[0.25, 0.75]]),
+  )
+  def test_bootstrap_params_non_1d_quantiles(self, quantiles):
+    with self.assertRaisesRegex(ValueError, 'quantiles must be a 1-D sequence'):
+      auditing.BootstrapParams(quantiles=quantiles)
+
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
   def test_bootstrap_params_quantiles_out_of_range(self, quantiles):
     with self.assertRaisesRegex(ValueError, 'quantiles must be in'):
@@ -620,7 +628,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertEqual(eps, 0)
 
   @parameterized.product(
-      quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
+      quantiles=((0.025,), (0.975,), (0.025, 0.975), (0.025, 0.5, 0.975)),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
   )
   def test_bootstrap(self, quantiles, bootstrap_type):

@@ -20,10 +20,11 @@ based on attack scores of held-in and held-out canaries
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from concurrent import futures
 import dataclasses
 import functools
-from typing import Callable, TypeAlias
+from typing import TypeAlias
 
 import dp_accounting
 import numpy as np
@@ -263,21 +264,26 @@ class BootstrapParams:
 
   Attributes:
     num_samples: The number of times to resample the canary scores.
-    quantiles: An array-like of quantiles to report. E.g., for a 95% confidence
-      interval, use (0.025, 0.975).
+    quantiles: A 1-D sequence or array of quantiles to report. E.g., for a 95%
+      confidence interval, use (0.025, 0.975).
     bias_correction: Whether to use bias correction.
     acceleration: Whether to use acceleration.
     seed: The seed for the random number generator.
   """
 
   num_samples: int = 1000
-  quantiles: np.typing.ArrayLike = (0.025, 0.975)
+  quantiles: Sequence[float] | np.ndarray = (0.025, 0.975)
   bias_correction: bool = True
   acceleration: bool = False
   seed: int | None = None
 
   def __post_init__(self):
     quantile_arr = np.asarray(self.quantiles)
+    if quantile_arr.ndim != 1:
+      raise ValueError(
+          'quantiles must be a 1-D sequence (e.g., (0.95,)), got'
+          f' {self.quantiles} with shape {quantile_arr.shape}.'
+      )
     if quantile_arr.size == 0:
       raise ValueError('quantiles cannot be empty.')
     if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
