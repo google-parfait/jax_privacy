@@ -776,6 +776,24 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     self.assertEqual(auditor.num_canaries, (3, 4))
 
+  def test_scalar_methods_return_python_float(self):
+    auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
+    self.assertIsInstance(auditor.epsilon_clopper_pearson(0.05, 0.01), float)
+    self.assertIsInstance(
+        auditor.epsilon_clopper_pearson(
+            0.05, 0.01, threshold_strategy=auditing.MultiSplit(seed=0)
+        ),
+        float,
+    )
+    self.assertIsInstance(auditor.epsilon_raw_counts(min_count=5), float)
+    self.assertIsInstance(auditor.tpr_at_given_fpr(0.1), float)
+    self.assertIsInstance(auditor.attack_auroc(), float)
+    self.assertIsInstance(auditor.max_accuracy(), float)
+    self.assertIsInstance(auditor.max_accuracy(significance=0.05), float)
+    self.assertIsInstance(auditor.epsilon_from_gdp(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run_fdp(0.05, 0.01), float)
+
 
 if __name__ == '__main__':
   absltest.main()
