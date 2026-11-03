@@ -25,7 +25,6 @@ from concurrent import futures
 import dataclasses
 import functools
 from typing import Any, TypeAlias, overload
-import warnings
 
 import dp_accounting
 import numpy as np
@@ -505,17 +504,6 @@ def _epsilon_raw_counts_helper(
   return np.max(eps, initial=initial_eps)
 
 
-def _warn_bootstrap_params_deprecated(method_name: str) -> None:
-  warnings.warn(
-      f'The `bootstrap_params` argument of `CanaryScoreAuditor.{method_name}`'
-      ' is deprecated and will be removed in a future release. Use'
-      ' `CanaryScoreAuditor.bootstrap` instead, e.g.'
-      f' `auditor.bootstrap(lambda a: a.{method_name}(...), params)`.',
-      DeprecationWarning,
-      stacklevel=3,
-  )
-
-
 def _random_partition(
     scores: np.ndarray,
     rng: np.random.Generator,
@@ -780,36 +768,12 @@ class CanaryScoreAuditor:
         one_sided,
     )
 
-  @overload
   def epsilon_raw_counts(
       self,
       min_count: int = 50,
       delta: float = 0,
       one_sided: bool = True,
-      *,
-      bootstrap_params: None = None,
   ) -> float:
-    ...
-
-  @overload
-  def epsilon_raw_counts(
-      self,
-      min_count: int = 50,
-      delta: float = 0,
-      one_sided: bool = True,
-      *,
-      bootstrap_params: BootstrapParams,
-  ) -> np.ndarray:
-    ...
-
-  def epsilon_raw_counts(
-      self,
-      min_count: int = 50,
-      delta: float = 0,
-      one_sided: bool = True,
-      *,
-      bootstrap_params: BootstrapParams | None = None,
-  ) -> float | np.ndarray:
     """Estimates epsilon from raw count statistics of seen/unseen canaries.
 
     ``min_count`` is the minimum number of FP (or FN, if not one_sided) required
@@ -821,8 +785,6 @@ class CanaryScoreAuditor:
       min_count: Only consider thresholds with this many TP/FP (TN/FN).
       delta: Approximate DP delta.
       one_sided: Whether to use only TPR/FPR (vs. max of TPR/FPR and TNR/FNR).
-      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
-        compute and return bootstrapped quantiles of the estimate.
 
     Returns:
       Epsilon estimate ln(TPR/FPR).
@@ -831,15 +793,6 @@ class CanaryScoreAuditor:
       raise ValueError(f'min_count must be positive, got {min_count}.')
     if not 0 <= delta <= 1:
       raise ValueError(f'delta must be in [0, 1], got {delta}.')
-
-    if bootstrap_params is not None:
-      _warn_bootstrap_params_deprecated('epsilon_raw_counts')
-      return np.asarray(
-          self.bootstrap(
-              lambda a: a.epsilon_raw_counts(min_count, delta, one_sided),
-              bootstrap_params,
-          )
-      )
 
     eps = _epsilon_raw_counts_helper(
         self._get_tp_counts(), self._get_fp_counts(), min_count, delta
@@ -857,47 +810,20 @@ class CanaryScoreAuditor:
     return float(max(eps, 0.0))
 
   @overload
-  def tpr_at_given_fpr(
-      self,
-      fpr: _ScalarFloat,
-      *,
-      bootstrap_params: None = None,
-  ) -> float:
+  def tpr_at_given_fpr(self, fpr: _ScalarFloat) -> float:
     ...
 
   @overload
-  def tpr_at_given_fpr(
-      self,
-      fpr: _ScalarFloat,
-      *,
-      bootstrap_params: BootstrapParams,
-  ) -> np.ndarray:
+  def tpr_at_given_fpr(self, fpr: _ArrayFloat) -> np.ndarray:
     ...
 
-  @overload
-  def tpr_at_given_fpr(
-      self,
-      fpr: _ArrayFloat,
-      *,
-      bootstrap_params: None = None,
-  ) -> np.ndarray:
-    ...
-
-  def tpr_at_given_fpr(
-      self,
-      fpr: np.typing.ArrayLike,
-      *,
-      bootstrap_params: BootstrapParams | None = None,
-  ) -> np.ndarray | float:
+  def tpr_at_given_fpr(self, fpr: np.typing.ArrayLike) -> np.ndarray | float:
     """Computes maximum TPR at a given FPR.
 
     Args:
       fpr: The desired false positive rate. May be a scalar, or an array of
         independent FPR values, in which case an array of the same shape is
         returned with the TPR at each FPR.
-      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
-        compute and return bootstrapped quantiles of the TPR. ``fpr`` must be a
-        scalar in this case.
 
     Returns:
       The maximum true positive rate at the given false positive rate,
@@ -907,60 +833,16 @@ class CanaryScoreAuditor:
     if not np.all((0 <= fpr) & (fpr <= 1)):
       raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
 
-    if bootstrap_params is not None:
-      _warn_bootstrap_params_deprecated('tpr_at_given_fpr')
-      if fpr.ndim > 0:
-        raise ValueError(
-            f'fpr must be a scalar for bootstrap, got shape {fpr.shape}.'
-        )
-      scalar_fpr = float(fpr)
-      return np.asarray(
-          self.bootstrap(
-              lambda auditor: auditor.tpr_at_given_fpr(scalar_fpr),
-              bootstrap_params,
-          )
-      )
-
     tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
     return float(tpr) if fpr.ndim == 0 else tpr
 
-  @overload
-  def attack_auroc(
-      self,
-      *,
-      bootstrap_params: None = None,
-  ) -> float:
-    ...
-
-  @overload
-  def attack_auroc(
-      self,
-      *,
-      bootstrap_params: BootstrapParams,
-  ) -> np.ndarray:
-    ...
-
-  def attack_auroc(
-      self,
-      *,
-      bootstrap_params: BootstrapParams | None = None,
-  ) -> float | np.ndarray:
+  def attack_auroc(self) -> float:
     """Computes the area under the ROC curve from the attack scores.
-
-    Args:
-      bootstrap_params: Deprecated; use :meth:`bootstrap` instead. If provided,
-        compute and return bootstrapped quantiles of the AUROC.
 
     Returns:
       The area under the ROC curve from the attack scores, allowing classifiers
       that randomize between two thresholds.
     """
-    if bootstrap_params is not None:
-      _warn_bootstrap_params_deprecated('attack_auroc')
-      return np.asarray(
-          self.bootstrap(CanaryScoreAuditor.attack_auroc, bootstrap_params)
-      )
-
     # Calculate AUROC using the trapezoidal rule. Since we have TN counts and FN
     # counts handy, we're actually computing the area under the curve of the TNR
     # as a function of FNR, which is equivalent.

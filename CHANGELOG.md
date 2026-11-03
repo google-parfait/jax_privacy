@@ -71,12 +71,13 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     per-method `bootstrap_params` keyword argument. The quantiles are returned
     as a tuple of Python floats.
 
-### Deprecated
+### Removed
 
 -   **`bootstrap_params` keyword argument** of
     `CanaryScoreAuditor.epsilon_raw_counts`, `tpr_at_given_fpr`, and
-    `attack_auroc`: Use `CanaryScoreAuditor.bootstrap` instead. The argument
-    now emits a `DeprecationWarning` and will be removed in a future release.
+    `attack_auroc`: Use `CanaryScoreAuditor.bootstrap` instead, e.g.
+    `auditor.bootstrap(lambda a: a.tpr_at_given_fpr(0.01), params)`. These
+    methods now always return a point estimate.
 
 ### Fixed
 

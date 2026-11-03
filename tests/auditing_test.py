@@ -14,7 +14,6 @@
 
 import itertools
 import typing
-import warnings
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -663,19 +662,6 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(interval, expected_interval, rtol=0.01)
 
-  def test_tpr_at_given_fpr_bootstrap_raises_non_scalar_fpr(self):
-    auditor = auditing.CanaryScoreAuditor(
-        in_canary_scores=[1, 2, 3], out_canary_scores=[0, 1, 2]
-    )
-    bootstrap_params = auditing.BootstrapParams()
-    fpr = [0.1, 0.2]
-    with warnings.catch_warnings():
-      warnings.simplefilter('ignore', DeprecationWarning)
-      with self.assertRaisesRegex(
-          ValueError, 'fpr must be a scalar for bootstrap'
-      ):
-        auditor.tpr_at_given_fpr(fpr, bootstrap_params=bootstrap_params)
-
   @parameterized.product(
       metric_fn=(
           lambda a: a.epsilon_raw_counts(),
@@ -704,26 +690,6 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     for bound in interval:
       self.assertIsInstance(bound, float)
     self.assertBetween(value, *interval)
-
-  @parameterized.parameters(
-      ('epsilon_raw_counts', ()),
-      ('tpr_at_given_fpr', (0.1,)),
-      ('attack_auroc', ()),
-  )
-  def test_bootstrap_params_kwarg_is_deprecated(self, metric_fn_name, args):
-    rng = np.random.default_rng(seed=0xBAD5EED)
-    auditor = auditing.CanaryScoreAuditor(
-        rng.normal(1, size=356), rng.normal(size=432)
-    )
-    bootstrap_params = auditing.BootstrapParams(seed=0xBAD5EED)
-    metric_fn = getattr(auditor, metric_fn_name)
-    with self.assertWarnsRegex(DeprecationWarning, 'Use .*bootstrap'):
-      interval = metric_fn(*args, bootstrap_params=bootstrap_params)
-    self.assertIsInstance(interval, np.ndarray)
-    expected = auditor.bootstrap(
-        lambda a: getattr(a, metric_fn_name)(*args), bootstrap_params
-    )
-    np.testing.assert_array_equal(interval, expected)
 
   @parameterized.named_parameters(
       ('significance_zero', {'significance': 0.0}, 'significance'),
@@ -828,41 +794,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertIsInstance(auditor.epsilon_one_run(0.05, 0.01), float)
     self.assertIsInstance(auditor.epsilon_one_run_fdp(0.05, 0.01), float)
 
-  def test_overloaded_return_types(self):
+  def test_tpr_at_given_fpr_overloaded_return_types(self):
     auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
-    bootstrap_params = auditing.BootstrapParams(
-        num_samples=10, quantiles=(0.05, 0.95), seed=0xBAD5EED
-    )
-
-    eps_scalar = typing.assert_type(
-        auditor.epsilon_raw_counts(min_count=5), float
-    )
-    eps_boot = typing.assert_type(
-        auditor.epsilon_raw_counts(
-            min_count=5, bootstrap_params=bootstrap_params
-        ),
-        np.ndarray,
-    )
     tpr_scalar = typing.assert_type(auditor.tpr_at_given_fpr(0.1), float)
-    tpr_boot = typing.assert_type(
-        auditor.tpr_at_given_fpr(0.1, bootstrap_params=bootstrap_params),
-        np.ndarray,
-    )
     tpr_arr = typing.assert_type(
         auditor.tpr_at_given_fpr([0.1, 0.2]), np.ndarray
     )
-    auroc_scalar = typing.assert_type(auditor.attack_auroc(), float)
-    auroc_boot = typing.assert_type(
-        auditor.attack_auroc(bootstrap_params=bootstrap_params), np.ndarray
-    )
-
-    self.assertIsInstance(eps_scalar, float)
-    self.assertIsInstance(eps_boot, np.ndarray)
     self.assertIsInstance(tpr_scalar, float)
-    self.assertIsInstance(tpr_boot, np.ndarray)
     self.assertIsInstance(tpr_arr, np.ndarray)
-    self.assertIsInstance(auroc_scalar, float)
-    self.assertIsInstance(auroc_boot, np.ndarray)
 
 
 if __name__ == '__main__':
