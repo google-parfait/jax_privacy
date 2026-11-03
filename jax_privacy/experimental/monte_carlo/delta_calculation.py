@@ -45,12 +45,17 @@ class PrivacyLossSamples:
     log_weights: Optional importance weights in log space, of the same shape as
       ``privacy_loss``, for samples :math:`x` drawn from a proposal distribution
       :math:`R` instead of :math:`P`. Passing :math:`\ln(P(x)/R(x))` for each
-      sample keeps the estimate unbiased. Cannot be combined with ``counts``:
-      the weight depends on :math:`x` and not only on its privacy loss, so
-      discretizing by privacy loss would bias the estimate.
+      sample keeps the estimate unbiased. If ``counts`` is also specified,
+      ``log_weights`` should be interpreted as the log of the average weight for
+      the ``counts`` samples.
     support_bound: An upper bound on each (weighted) sample of the hockey-stick
       divergence, see :func:`get_overall_delta`. Plain Monte Carlo samples are
-      bounded by 1.
+      bounded by 1. If one wishes to save memory by rounding up ``privacy_loss``
+      to the nearest multiple of some discretization, it is fine to set
+      ``support_bound`` based on the original, unrounded samples, since the
+      probability the rounded samples incorrectly pass verification is at most
+      the probability the original samples do the same, and ``support_bound`` is
+      used to upper bound the latter.
   """
 
   privacy_loss: npt.ArrayLike
@@ -66,11 +71,6 @@ class PrivacyLossSamples:
       value = getattr(self, name)
       if value is not None and np.shape(value) != shape:
         raise ValueError(f'{name} must have the same shape as privacy_loss.')
-    if self.counts is not None and self.log_weights is not None:
-      raise ValueError(
-          'counts cannot be combined with log_weights: discretizing'
-          ' importance-weighted samples is not supported.'
-      )
 
   @property
   def num_samples(self) -> float:
@@ -78,6 +78,73 @@ class PrivacyLossSamples:
     if self.counts is None:
       return np.size(self.privacy_loss)
     return np.sum(self.counts)
+
+
+def merge_privacy_loss_samples(
+    *samples: PrivacyLossSamples,
+) -> PrivacyLossSamples:
+  """Merges one or more :class:`PrivacyLossSamples` into deduplicated samples.
+
+  Duplicate ``privacy_loss`` values across (and within) the inputs are combined
+  by summing their ``counts`` and, if any input specifies ``log_weights``,
+  computing the log of the count-weighted average of the importance weights in
+  each bucket. When combined with rounding ``privacy_loss`` values, this can
+  significantly reduce the memory footprint of storing samples.
+
+  Args:
+    *samples: One or more :class:`PrivacyLossSamples` instances with the same
+      ``support_bound``.
+
+  Returns:
+    A :class:`PrivacyLossSamples` with unique sorted ``privacy_loss`` values,
+    summed ``counts``, and (if any input had ``log_weights``) count-weighted
+    average ``log_weights``.
+
+  Raises:
+    ValueError: If no samples are provided or if ``support_bound`` values
+      differ.
+  """
+  if not samples:
+    raise ValueError('At least one PrivacyLossSamples instance is required.')
+  support_bound = samples[0].support_bound
+  if any(s.support_bound != support_bound for s in samples[1:]):
+    raise ValueError(
+        'Cannot merge PrivacyLossSamples with different support_bound values.'
+    )
+
+  losses = [np.asarray(s.privacy_loss, dtype=float) for s in samples]
+  privacy_loss = np.concatenate(losses)
+  counts = np.concatenate([
+      np.ones(len(loss), dtype=int)
+      if s.counts is None or len(loss) == 0
+      else np.asarray(s.counts)
+      for s, loss in zip(samples, losses)
+  ])
+  unique_loss, inverse_indices = np.unique(privacy_loss, return_inverse=True)
+  merged_counts = np.zeros(len(unique_loss), dtype=counts.dtype)
+  np.add.at(merged_counts, inverse_indices, counts)
+
+  if all(s.log_weights is None for s in samples):
+    merged_log_weights = None
+  else:
+    log_weights = np.concatenate([
+        np.zeros(len(loss), dtype=float)
+        if s.log_weights is None
+        else np.asarray(s.log_weights, dtype=float)
+        for s, loss in zip(samples, losses)
+    ])
+    with np.errstate(divide='ignore', invalid='ignore'):
+      log_weighted_counts = log_weights + np.log(counts)
+      log_sum_weights = np.full(len(unique_loss), -np.inf, dtype=float)
+      np.logaddexp.at(log_sum_weights, inverse_indices, log_weighted_counts)
+      merged_log_weights = log_sum_weights - np.log(merged_counts)
+
+  return PrivacyLossSamples(
+      privacy_loss=unique_loss,
+      counts=merged_counts,
+      log_weights=merged_log_weights,
+      support_bound=support_bound,
+  )
 
 
 def _convert_to_accountant(
