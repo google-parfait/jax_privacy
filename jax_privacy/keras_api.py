@@ -412,7 +412,8 @@ class _PoissonSampledTrainingDataset(keras.utils.PyDataset):
     )
     self._padding_multiple = _get_poisson_padding_multiple(dp_params)
     seed = _get_random_int64() if dp_params.seed is None else dp_params.seed
-    self._rng = np.random.default_rng(seed)
+    # The seed can be any int64, but numpy only accepts non-negative seeds.
+    self._rng = np.random.default_rng(int(seed) % 2**64)
     self._epoch_batches = []
     self.on_epoch_end()
 
