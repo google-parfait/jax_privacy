@@ -33,14 +33,10 @@ def _point_mass(
     privacy_loss, count=1000, log_weight=None, support_bound=1.0
 ) -> delta_calculation.PrivacyLossSamples:
   """Samples all equal to a single privacy loss value."""
-  if log_weight is None:
-    return _PrivacyLossSamples(
-        [privacy_loss], [count], support_bound=support_bound
-    )
-  # Counts cannot be combined with log weights, so repeat the sample instead.
   return _PrivacyLossSamples(
-      [privacy_loss] * count,
-      log_weights=[log_weight] * count,
+      [privacy_loss],
+      [count],
+      log_weights=[log_weight] if log_weight is not None else None,
       support_bound=support_bound,
   )
 
@@ -54,10 +50,6 @@ class PrivacyLossSamplesTest(parameterized.TestCase):
           'wrong_log_weights_shape',
           dict(privacy_loss=[1.0, 2.0], log_weights=[0.0]),
       ),
-      (
-          'counts_with_log_weights',
-          dict(privacy_loss=[1.0], counts=[2], log_weights=[0.0]),
-      ),
   )
   def test_rejects_invalid_arguments(self, kwargs):
     with self.assertRaises(ValueError):
@@ -69,6 +61,148 @@ class PrivacyLossSamplesTest(parameterized.TestCase):
         delta_calculation.PrivacyLossSamples(privacy_loss, counts).num_samples,
         expected,
     )
+
+  def test_merge_privacy_loss_samples_unweighted(self):
+    s1 = _PrivacyLossSamples([1.0, 2.0, 1.0])
+    s2 = _PrivacyLossSamples([2.0, 3.0], counts=[4, 2])
+    merged = delta_calculation.merge_privacy_loss_samples(s1, s2)
+    np.testing.assert_array_equal(merged.privacy_loss, [1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(merged.counts, [2, 5, 2])
+    self.assertIsNone(merged.log_weights)
+    self.assertEqual(merged.support_bound, 1.0)
+    self.assertEqual(merged.num_samples, 9)
+
+  def test_merge_privacy_loss_samples_weighted_preserves_delta(self):
+    s1 = _PrivacyLossSamples(
+        [1.0, 2.0, 1.0],
+        counts=[2, 1, 3],
+        log_weights=[math.log(0.2), math.log(0.5), math.log(0.4)],
+        support_bound=0.5,
+    )
+    s2 = _PrivacyLossSamples(
+        [2.0, 3.0],
+        counts=[3, 2],
+        log_weights=[math.log(0.1), math.log(0.8)],
+        support_bound=0.5,
+    )
+    merged = delta_calculation.merge_privacy_loss_samples(s1, s2)
+    np.testing.assert_array_equal(merged.privacy_loss, [1.0, 2.0, 3.0])
+    np.testing.assert_array_equal(merged.counts, [5, 4, 2])
+    np.testing.assert_allclose(
+        merged.log_weights,
+        [
+            math.log((2 * 0.2 + 3 * 0.4) / 5),
+            math.log((1 * 0.5 + 3 * 0.1) / 4),
+            math.log(0.8),
+        ],
+    )
+    self.assertEqual(merged.support_bound, 0.5)
+
+    for epsilon in [0.5, 1.0, 1.5, 2.5]:
+      delta_1 = delta_calculation.delta_from_epsilon_and_samples(epsilon, s1)
+      delta_2 = delta_calculation.delta_from_epsilon_and_samples(epsilon, s2)
+      expected_delta = (
+          s1.num_samples * delta_1 + s2.num_samples * delta_2
+      ) / merged.num_samples
+      self.assertAlmostEqual(
+          delta_calculation.delta_from_epsilon_and_samples(epsilon, merged),
+          expected_delta,
+          places=12,
+      )
+
+  def test_merge_privacy_loss_samples_mixed_none_and_explicit_log_weights(self):
+    # Samples with log_weights=None have implicit weight 1.0 (log_weight=0.0).
+    s1 = _PrivacyLossSamples([2.0], counts=[1], log_weights=None)
+    s2 = _PrivacyLossSamples([2.0], counts=[3], log_weights=[math.log(0.5)])
+    merged = delta_calculation.merge_privacy_loss_samples(s1, s2)
+    np.testing.assert_array_equal(merged.privacy_loss, [2.0])
+    np.testing.assert_array_equal(merged.counts, [4])
+    np.testing.assert_allclose(
+        merged.log_weights, [math.log((1 * 1.0 + 3 * 0.5) / 4)]
+    )
+
+  def test_merge_privacy_loss_samples_single_instance_deduplicates(self):
+    s = _PrivacyLossSamples(
+        [2.0, 1.0, 2.0],
+        log_weights=[math.log(0.2), math.log(0.5), math.log(0.6)],
+        support_bound=0.25,
+    )
+    merged = delta_calculation.merge_privacy_loss_samples(s)
+    np.testing.assert_array_equal(merged.privacy_loss, [1.0, 2.0])
+    np.testing.assert_array_equal(merged.counts, [1, 2])
+    np.testing.assert_allclose(
+        merged.log_weights, [math.log(0.5), math.log(0.4)]
+    )
+    self.assertEqual(merged.support_bound, 0.25)
+
+  def test_merge_privacy_loss_samples_rejects_mismatched_support_bound(self):
+    s1 = _PrivacyLossSamples([1.0], support_bound=0.5)
+    s2 = _PrivacyLossSamples([1.0], support_bound=0.25)
+    with self.assertRaisesRegex(ValueError, 'different support_bound'):
+      delta_calculation.merge_privacy_loss_samples(s1, s2)
+
+  def test_merge_privacy_loss_samples_rejects_empty_args(self):
+    with self.assertRaisesRegex(ValueError, 'At least one'):
+      delta_calculation.merge_privacy_loss_samples()
+
+  def test_merge_privacy_loss_samples_thousands_of_instances_is_stable(self):
+    rng = np.random.default_rng(0x5EED)
+    num_instances = 5000
+    samples_per_instance = 10
+    bucket_values = np.array([-1.0, 0.0, 0.5, 1.0, 2.0, 3.0])
+
+    all_losses = rng.choice(
+        bucket_values, size=(num_instances, samples_per_instance)
+    )
+    all_counts = rng.integers(1, 20, size=(num_instances, samples_per_instance))
+    # Include very negative log weights to test underflow and precision in log
+    # space across thousands of merges.
+    all_log_weights = rng.uniform(
+        -500.0, -490.0, size=(num_instances, samples_per_instance)
+    )
+
+    instances = [
+        _PrivacyLossSamples(
+            privacy_loss=all_losses[i],
+            counts=all_counts[i],
+            log_weights=all_log_weights[i],
+            support_bound=0.5,
+        )
+        for i in range(num_instances)
+    ]
+
+    expected_counts = []
+    expected_log_weights = []
+    for b in bucket_values:
+      mask = all_losses == b
+      bucket_counts = all_counts[mask]
+      bucket_log_weighted_counts = all_log_weights[mask] + np.log(bucket_counts)
+      max_lw = np.max(bucket_log_weighted_counts)
+      total_count = int(np.sum(bucket_counts))
+      expected_counts.append(total_count)
+      expected_log_weights.append(
+          max_lw
+          + np.log(np.sum(np.exp(bucket_log_weighted_counts - max_lw)))
+          - np.log(total_count)
+      )
+
+    batch_merged = delta_calculation.merge_privacy_loss_samples(*instances)
+    np.testing.assert_array_equal(batch_merged.privacy_loss, bucket_values)
+    np.testing.assert_array_equal(batch_merged.counts, expected_counts)
+    np.testing.assert_allclose(
+        batch_merged.log_weights, expected_log_weights, rtol=1e-12
+    )
+    self.assertEqual(batch_merged.support_bound, 0.5)
+
+    seq_merged = instances[0]
+    for s in instances[1:]:
+      seq_merged = delta_calculation.merge_privacy_loss_samples(seq_merged, s)
+    np.testing.assert_array_equal(seq_merged.privacy_loss, bucket_values)
+    np.testing.assert_array_equal(seq_merged.counts, expected_counts)
+    np.testing.assert_allclose(
+        seq_merged.log_weights, expected_log_weights, rtol=1e-12
+    )
+    self.assertEqual(seq_merged.support_bound, 0.5)
 
 
 class DeltaCalculationTest(parameterized.TestCase):
@@ -413,14 +547,22 @@ class DeltaFromEpsilonAndSamplesTest(parameterized.TestCase):
     )
 
   @parameterized.named_parameters(
-      ('zero_log_weights', [0.0, 0.0], 3 / 4),
-      ('log_weights', [math.log(0.25), math.log(0.5)], 5 / 16),
+      ('zero_log_weights', None, [0.0, 0.0], 3 / 4),
+      ('log_weights', None, [math.log(0.25), math.log(0.5)], 5 / 16),
+      (
+          'counts_and_log_weights',
+          [2, 1],
+          [math.log(3.0), math.log(0.5)],
+          (2 * 0.5 * 3.0 + 1 * 1.0 * 0.5) / 3,
+      ),
   )
-  def test_log_weights_scale_estimands(self, log_weights, expected_delta):
+  def test_delta_from_epsilon_and_samples_with_log_weights(
+      self, counts, log_weights, expected_delta
+  ):
     delta = delta_calculation.delta_from_epsilon_and_samples(
         epsilon=3,
         samples=_PrivacyLossSamples(
-            [3 + math.log(2), 1e9], log_weights=log_weights
+            [3 + math.log(2), 1e9], counts=counts, log_weights=log_weights
         ),
     )
     self.assertAlmostEqual(delta, expected_delta, places=5)
