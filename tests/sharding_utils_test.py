@@ -131,7 +131,7 @@ class RandomTest(parameterized.TestCase):
 
     sample1 = sharding_utils._parallel_sample(rng, shape, sharding)
     sample2 = sharding_utils._parallel_sample(rng, shape, sharding)
-    combined = jnp.concatenate([sample1, sample2])
+    combined = np.concatenate([sample1, sample2])
     # Assert uniqueness within and across samples
     self.assertLen(np.unique(combined), combined.size)
 
