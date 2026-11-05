@@ -179,9 +179,9 @@ jobs:
       - name: Run Standard Tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test and not keras_api_e2e_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test and not _random_test and not keras_api_e2e_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
           pytest -n auto tests/distributed_noise_generation_test.py --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
-          pytest -n auto tests/sharding_utils_test.py --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest -n auto tests/sharding_utils_test.py tests/_random_test.py --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
 
   matrix-tests:
     name: "Heavy Tests: Linux Only"

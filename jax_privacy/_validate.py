@@ -231,3 +231,30 @@ def discrete_clipping(
         'l2_clip_norm must be a Real scalar.'
     )
   x64_enabled()
+
+
+def jitted(status: bool = False):
+  """Validates whether execution is inside a jitted context."""
+  if isinstance(jnp.array(0), jax.core.Tracer) != status:
+    expected = 'within' if status else 'outside'
+    raise RuntimeError(
+        f'This function must be used {expected} a jitted context.'
+    )
+
+
+def explicit_mesh(
+    status: bool = True,
+    device_mesh: jax.sharding.Mesh | jax.sharding.AbstractMesh | None = None,
+):
+  """Validates that all mesh axes use Explicit (or Auto) sharding."""
+  if device_mesh is None:
+    device_mesh = jax.sharding.get_abstract_mesh()
+  axis_type = (
+      jax.sharding.AxisType.Explicit if status else jax.sharding.AxisType.Auto
+  )
+  axis_types = device_mesh.axis_types
+  if not axis_types or not all(t == axis_type for t in axis_types):
+    raise ValueError(
+        f'Requires a non-empty {axis_type} mesh. Please set the mesh using'
+        ' jax.set_mesh().'
+    )
