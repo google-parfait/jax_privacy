@@ -223,7 +223,7 @@ def _gaussian_linear_combination(
     return partial + coef * noise
 
   lower_bound, upper_bound = _compute_loop_bounds(matrix_row)
-  loop_state = jnp.zeros(shape, dtype)
+  loop_state = jnp.zeros(shape, dtype, out_sharding=out_sharding)
   return jax.lax.fori_loop(lower_bound, upper_bound, loop_body, loop_state)
 
 
@@ -237,7 +237,11 @@ def _dense_matrix_factorization_privatizer(
 ) -> optax.GradientTransformation:
   """Creates a gradient privatizer from a dense matrix C^{-1}."""
   # See Section 4.4.5 of https://arxiv.org/pdf/2506.08201 (Approach 2)
-  noising_matrix = jnp.asarray(noising_matrix)
+  # Strip any active Auto mesh so closed-over constants work with explicit_axes.
+  with jax.set_mesh(None):
+    noising_matrix = jnp.asarray(np.asarray(noising_matrix))
+    key_data = np.asarray(jax.random.key_data(prng_key))
+    prng_key = jax.random.wrap_key_data(key_data)
 
   if noising_matrix.ndim != 2:
     raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
