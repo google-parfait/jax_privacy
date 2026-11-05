@@ -18,6 +18,7 @@ import chex
 import jax
 from jax import numpy as jnp
 from jax_privacy import noise_addition
+from jax_privacy import sharding_utils
 from jax_privacy.matrix_factorization import buffered_toeplitz
 from jax_privacy.matrix_factorization import streaming_matrix
 from jax_privacy.matrix_factorization import toeplitz
@@ -301,6 +302,24 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     update, state1 = noisy_optimizer.update(params, state0, params)
     chex.assert_trees_all_equal_shapes_and_dtypes(state0, state1)
     chex.assert_trees_all_equal_shapes_and_dtypes(update, params)
+
+  def test_dense_privatizer_with_sharding_specs_zero(self):
+    axis_types = (jax.sharding.AxisType.Auto,)
+    mesh = jax.make_mesh((1,), ('data',), axis_types=axis_types)
+    spec = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
+    with jax.set_mesh(mesh):
+      privatizer = noise_addition.matrix_factorization_privatizer(
+          noising_matrix=np.eye(_ITERATIONS),
+          prng_key=jax.random.key(_SEED),
+          stddev=_STDDEV,
+          intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
+      )
+      privatizer = sharding_utils.with_sharding_specs(privatizer, spec)
+      grads = jax.device_put(jnp.zeros(8, dtype=jnp.float32), spec)
+      state = privatizer.init(grads)
+      noisy_grads, state = jax.jit(privatizer.update)(grads, state)
+      self.assertEqual(noisy_grads.shape, (8,))
+      self.assertEqual(int(state), 1)
 
 
 if __name__ == '__main__':
