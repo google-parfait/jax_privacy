@@ -32,7 +32,7 @@ permissions:
 jobs:
   check_rebase:
     name: "Check Branch Sync"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 5
     steps:
       - name: Checkout code
@@ -42,7 +42,13 @@ jobs:
           persist-credentials: false
 
       - name: Check if PR is up to date
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          if [ "$PR_AUTHOR" = "copybara-service[bot]" ]; then
+            echo "Automated sync PR; skipping branch sync check."
+            exit 0
+          fi
           git fetch origin main
           BEHIND=$(git rev-list --count HEAD..origin/main)
           if [ "$BEHIND" -gt 0 ]; then
@@ -61,7 +67,7 @@ jobs:
           fi
   markdown-lint:
     name: "Lint: Markdown"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -75,7 +81,7 @@ jobs:
 
   check-lockfile:
     name: "Check: pylock.toml Sync"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -115,7 +121,7 @@ jobs:
 
   lint:
     name: "Lint: Python 3.11"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -151,7 +157,7 @@ jobs:
 
   test:
     name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    runs-on: ${{ matrix.os }}
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -186,7 +192,7 @@ jobs:
 
   matrix-tests:
     name: "Heavy Tests: Linux Only"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -212,7 +218,7 @@ jobs:
 
   docs:
     name: "Docs: Python 3.11"
-    runs-on: ubuntu-latest
+    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
