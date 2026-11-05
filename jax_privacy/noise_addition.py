@@ -257,7 +257,7 @@ def _dense_matrix_factorization_privatizer(
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
     return noisy_grads, index + 1
 
-  init = lambda _: jnp.array(0)
+  init = lambda _: jnp.array(0, dtype=jnp.int32)
   return optax.GradientTransformation(init, update)
 
 

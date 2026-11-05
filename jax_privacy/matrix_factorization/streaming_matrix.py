@@ -285,7 +285,7 @@ def diagonal(diag: jax.Array) -> StreamingMatrix:
     A StreamingMatrix representing the corresponding diagonal matrix.
   """
   return StreamingMatrix.from_array_implementation(
-      lambda _: jnp.array(0),
+      lambda _: jnp.array(0, dtype=jnp.int32),
       lambda value, i: (value * diag.at[i].get(mode='clip'), i + 1),
   )
 
@@ -304,7 +304,7 @@ def momentum_sgd_matrix(
   def init_multiply(abstract_value):
     dtype = jnp.promote_types(abstract_value.dtype, lr_sched.dtype)
     zero = jnp.zeros_like(abstract_value, dtype=dtype)
-    return jnp.array(0), zero, zero
+    return jnp.array(0, dtype=jnp.int32), zero, zero
 
   def multiply_next(
       value: jax.Array, state: tuple[int, jax.Array, jax.Array]

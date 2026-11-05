@@ -115,6 +115,10 @@ class ExecutionPlanTest(parameterized.TestCase):
     )
     plan = config.make()
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
+    _, buffers = plan.noise_addition_transform.init(
+        np.zeros(4, dtype=np.float32)
+    )
+    self.assertEqual(buffers.dtype, np.float32)
 
   def test_make_with_custom_performance_flags(self):
     config = BandMFConfig.default(

@@ -603,8 +603,9 @@ class BandMFConfig:
     # with_sharding_specs does not see AxisType.Auto constants; np.asarray
     # strips any mesh sharding already attached to self.strategy.
     with jax.set_mesh(None):
+      strategy = np.asarray(self.strategy, dtype=performance_flags.dtype)
       noising_matrix = toeplitz.inverse_as_streaming_matrix(
-          np.asarray(self.strategy), column_normalize_for_n
+          strategy, column_normalize_for_n
       )
 
     query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
