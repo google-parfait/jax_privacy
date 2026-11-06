@@ -58,7 +58,7 @@ def _from_pytree(
   """Yields padded (batch, is_padding_example) pairs from an array PyTree."""
   del max_workers
   num_examples = _validate.batch(dataset, padding_example)
-  _validate.multihost(jax.tree.map(lambda x: x[0], dataset), rng)
+  _validate.equal_across_hosts(dataset=jax.tree.map(lambda x: x[0], dataset))
   index_iterator = strategy.batch_iterator(num_examples, rng=rng)
 
   # When sharding across a mesh (including multi-controller JAX),
@@ -103,7 +103,7 @@ def _from_pygrain(
     # Assumes uniform record shapes; mismatched shapes fail downstream anyway.
     logging.info("Inferring padding_example from dataset[0].")
     padding_example = dataset[0]
-  _validate.multihost(dataset[0], rng)
+  _validate.equal_across_hosts(dataset=dataset[0])
   index_iterator = strategy.batch_iterator(len(dataset), rng=copy.deepcopy(rng))
   padding_element = jax.tree.map(
       lambda x: np.zeros(x.shape, dtype=x.dtype), padding_example

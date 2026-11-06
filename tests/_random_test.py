@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest import mock
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import chex
@@ -30,6 +32,53 @@ class RandomTest(parameterized.TestCase):
     axis_types = (jax.sharding.AxisType.Explicit,) * 2
     self.mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
     jax.set_mesh(self.mesh)
+
+  @parameterized.parameters(1, 8, 31, 64, 128)
+  def test_secure_seed_bit_width(self, bits):
+    seed = _random.secure_seed(bits)
+    self.assertIsInstance(seed, int)
+    self.assertGreaterEqual(seed, 0)
+    self.assertLess(seed, 2**bits)
+
+  @parameterized.parameters(0, -5)
+  def test_secure_seed_invalid_bits(self, bits):
+    with self.assertRaises(ValueError):
+      _random.secure_seed(bits)
+
+  def test_secure_seed_multihost_broadcast(self):
+    expected = (2**100 + 7).to_bytes(16, 'big')
+    arr = np.frombuffer(expected, dtype=np.uint8)
+    with mock.patch.object(
+        _random.multihost_utils, 'broadcast_one_to_all', return_value=arr
+    ) as mock_bcast:
+      self.assertEqual(_random.secure_seed(128), 2**100 + 7)
+      mock_bcast.assert_called_once()
+
+  def test_default_rng_preserves_generator_identity(self):
+    rng = np.random.default_rng(42)
+    self.assertIs(_random.default_rng(rng), rng)
+
+  def test_default_rng_none_broadcasts_seed(self):
+    with mock.patch.object(_random, 'secure_seed', return_value=12345):
+      rng = _random.default_rng(None)
+    expected = np.random.default_rng(12345)
+    self.assertEqual(rng.integers(2**31), expected.integers(2**31))
+
+  def test_default_prng_key_resolves_all_types(self):
+    expected_7 = jax.random.key(int(np.random.default_rng(7).integers(2**31)))
+    self.assertTrue(jnp.array_equal(_random.default_prng_key(7), expected_7))
+
+    rng = np.random.default_rng(99)
+    rng_key = _random.default_prng_key(rng)
+    expected = jax.random.key(int(np.random.default_rng(99).integers(2**31)))
+    self.assertTrue(jnp.array_equal(rng_key, expected))
+
+    with mock.patch.object(_random, 'secure_seed', return_value=777):
+      none_key = _random.default_prng_key(None)
+    expected_none = jax.random.key(
+        int(np.random.default_rng(777).integers(2**31))
+    )
+    self.assertTrue(jnp.array_equal(none_key, expected_none))
 
   def test_uniqueness(self):
     rng = np.random.default_rng(42)

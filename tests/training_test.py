@@ -190,12 +190,16 @@ class BatchIteratorTest(parameterized.TestCase):
       [(batch, _)] = list(
           _data_loading.batch_iterator(dataset, strategy, rng=42)
       )
-    mock_assert_equal.assert_called_once()
-    _validate.multihost_utils.assert_equal(*mock_assert_equal.call_args[0])
-    checked_seed, checked_crc = mock_assert_equal.call_args[0][0]
-    self.assertEqual(checked_seed, np.random.default_rng(42).integers(2**31))
+    self.assertEqual(mock_assert_equal.call_count, 2)
+    for call in mock_assert_equal.call_args_list:
+      _validate.multihost_utils.assert_equal(*call[0])
+    checked_ds = mock_assert_equal.call_args_list[0][0][0]
+    checked_rng = mock_assert_equal.call_args_list[1][0][0]
     expected_crc = _validate.zlib.crc32(raw[:1].tobytes()) % 2**31
-    self.assertEqual(checked_crc, expected_crc)
+    expected_rng = np.random.default_rng(42).integers(2**31)
+    expected_rng_crc = _validate.zlib.crc32(expected_rng.tobytes()) % 2**31
+    self.assertEqual(checked_ds['dataset'], expected_crc)
+    self.assertEqual(checked_rng['rng'], expected_rng_crc)
     expected_idx = next(strategy.batch_iterator(4, rng=42))
     np.testing.assert_allclose(batch, raw[expected_idx])
 

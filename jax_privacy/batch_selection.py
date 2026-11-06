@@ -85,6 +85,7 @@ from typing import Iterator
 from absl import logging
 import numpy as np
 
+from . import _random
 from . import _validate
 from . import sharding_utils
 
@@ -337,7 +338,7 @@ class CyclicPoissonSampling(BatchSelectionStrategy):
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
 
     if self.partition_type == PartitionType.INDEPENDENT:
@@ -392,7 +393,7 @@ class BallsInBinsSampling(BatchSelectionStrategy):
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
     groups = _independent_partition(num_examples, self.cycle_length, rng, dtype)
 
@@ -497,7 +498,7 @@ class RandomAllocationSampling(BatchSelectionStrategy):
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
 
     if self.partition_type == PartitionType.INDEPENDENT:
@@ -572,7 +573,7 @@ class FixedBatchSampling(BatchSelectionStrategy):
       raise ValueError(
           'batch_size must be <= num_examples when replace is False.'
       )
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
     for _ in range(self.iterations):
       yield rng.choice(
@@ -638,7 +639,7 @@ class BMinSepSampling(BatchSelectionStrategy):
     # Aliases for brevity.
     p = self.sampling_prob
     b = self.min_sep
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
     if self.warm_start and b > 1:
       size = rng.binomial(n=num_examples, p=(b - 1) * p / (1 + (b - 1) * p))
@@ -724,7 +725,7 @@ class MinSepRandomAllocation(BatchSelectionStrategy):
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     dtype = _get_dtype(num_examples)
 
     if self.random_rotation:
@@ -826,7 +827,7 @@ class UserSelectionStrategy:
       base_strategy and all entries in the same row are examples owned by the
       same selected user.
     """
-    rng = np.random.default_rng(rng)
+    rng = _random.default_rng(rng)
     # inverse contains cleaned ids in the range [0, ..., num_users - 1].
     unique, inverse = np.unique(user_ids, return_inverse=True)
     num_users = unique.size
