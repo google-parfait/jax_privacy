@@ -39,7 +39,7 @@ Example Usage:
   >>> data, in_c, out_c = np.zeros((8, 2)), np.ones((4, 2)), -np.ones((4, 2))
   >>> params0 = np.zeros(2)
   >>> state0 = trainer.init(params0)
-  >>> state = trainer.fit(np.vstack([data, in_c]), state0, rng_or_seed=0)
+  >>> state = trainer.fit(np.vstack([data, in_c]), state0, rng=0)
   >>> auditor = audit(loss_fn, state.params, in_c, out_c, params0)
   >>> auditor.attack_auroc()
   1.0
@@ -55,6 +55,7 @@ import jax
 import jax_privacy
 from jax_privacy import _compilation
 from jax_privacy import _data_loading
+from jax_privacy import _random
 from jax_privacy import _validate
 from jax_privacy import auditing
 from jax_privacy import execution_plan
@@ -157,7 +158,7 @@ class DPTrainer:
   is set and a mesh is active, :meth:`fit` shards the batch dimension of each
   batch and padding mask along ``PartitionSpec(batch_axis_name)``. In
   multi-controller setups (``jax.process_count() > 1``), every process must
-  pass the full ``dataset`` and an identical ``rng_or_seed`` to :meth:`fit`.
+  pass the full ``dataset`` and an identical ``rng`` to :meth:`fit`.
 
   Attributes:
     config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
@@ -287,12 +288,10 @@ class DPTrainer:
       dataset: Dataset,
       state: TrainingState,
       *,
-      rng_or_seed: np.random.Generator | int | None = None,
+      rng: np.random.Generator,
   ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
     """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
-    return _compilation.precompile(
-        self, dataset, state, rng_or_seed=rng_or_seed
-    )
+    return _compilation.precompile(self, dataset, state, rng=rng)
 
   def fit(
       self,
@@ -300,6 +299,7 @@ class DPTrainer:
       state: TrainingState,
       *,
       callback: CallbackFn | None = None,
+      rng: np.random.Generator | int | None = None,
       rng_or_seed: np.random.Generator | int | None = None,
       precompile: bool = True,
   ) -> TrainingState:
@@ -318,11 +318,12 @@ class DPTrainer:
         arrays you need to retain after ``fit`` returns.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
-      rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
-        sampling batches (impacting privacy) and initializing the loss PRNG key
+      rng: Optional random seed or ``numpy.random.Generator``, used for sampling
+        batches (impacting privacy) and initializing the loss PRNG key
         (potentially impacting utility). Does not influence the noise addition
         transform, which is configured via the
         :class:`~jax_privacy.execution_plan.DPExecutionPlan`.
+      rng_or_seed: Deprecated; use ``rng`` instead.
       precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
@@ -343,20 +344,19 @@ class DPTrainer:
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
 
+    if rng_or_seed is not None:
+      logging.warning("rng_or_seed is deprecated; use rng instead.")
+      rng = rng_or_seed
+    rng = _random.default_rng(rng)
+    prng_key = _random.default_prng_key(rng)
     if (
         precompile
         or getattr(self.compilation_strategy, "multiple", None) is None
     ):
-      trainer, futures = self._precompile(
-          dataset, state, rng_or_seed=rng_or_seed
-      )
+      trainer, futures = self._precompile(dataset, state, rng=rng)
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     assert trainer.compilation_strategy.multiple is not None
     warn_on_cache_miss = bool(futures)
-
-    # We need tight alignment between how rng is used here and in precompile().
-    rng = np.random.default_rng(rng_or_seed)
-    prng_key = jax.random.key(int(rng.integers(2**63)))
 
     with _compilation.hoist_closed_over_constants():
       axis = trainer.performance_flags.batch_axis_name
@@ -427,7 +427,8 @@ def audit(
     untrained: Params | None = None,
     *,
     microbatch_size: int | None = None,
-    prng_key: jax.Array | int = 0,
+    rng: np.random.Generator | int | None = None,
+    prng_key: jax.Array | int | None = None,
 ) -> auditing.CanaryScoreAuditor:
   """Scores held-in and held-out canaries and returns an auditor.
 
@@ -440,14 +441,20 @@ def audit(
       as ``loss(untrained) - loss(trained)``. If ``None``, scores are
       ``-loss(trained)``.
     microbatch_size: Optional microbatch size for evaluating ``loss_fn``.
-    prng_key: Random seed or PRNG key for loss_fn evaluation.
+    rng: Optional random seed or ``numpy.random.Generator`` for ``loss_fn``
+      evaluation.
+    prng_key: Deprecated; use ``rng`` instead.
 
   Returns:
     A :class:`~jax_privacy.auditing.CanaryScoreAuditor` initialized with the
     held-in and held-out canary scores.
   """
-  if isinstance(prng_key, int):
-    prng_key = jax.random.key(prng_key)
+  if prng_key is not None:
+    logging.warning("prng_key is deprecated; use rng instead.")
+    if isinstance(prng_key, int):
+      prng_key = jax.random.key(prng_key)
+  else:
+    prng_key = _random.default_prng_key(rng)
   in_key, out_key = jax.random.split(prng_key)
   args = (loss_fn, trained)
   kw = dict(untrained=untrained, microbatch_size=microbatch_size)

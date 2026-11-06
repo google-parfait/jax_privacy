@@ -25,7 +25,7 @@ noise, and splits it into a new key for future steps.
 
 Example Usage:
   >>> import jax
-  >>> privatizer = gaussian_privatizer(stddev=1.0, prng_key=jax.random.key(0))
+  >>> privatizer = gaussian_privatizer(stddev=1.0, rng=0)
   >>> model = grad = jax.numpy.zeros(10)
   >>> noise_state = privatizer.init(model)
   >>> for _ in range(4):
@@ -48,11 +48,14 @@ import enum
 import functools
 from typing import NamedTuple, Protocol
 
+from absl import logging
 import jax
 from jax import numpy as jnp
 import numpy as np
 import optax
 
+from . import _random
+from . import _validate
 from . import sharding_utils
 from .matrix_factorization import streaming_matrix
 
@@ -130,6 +133,7 @@ def matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike | streaming_matrix.StreamingMatrix,
     *,
     stddev: float,
+    rng: np.random.Generator | int | None = None,
     prng_key: jax.Array | int | None = None,
     dtype: jax.typing.DTypeLike | None = None,
     intermediate_strategy: ShardingStrategies = ShardingStrategies.DEFAULT,
@@ -154,7 +158,9 @@ def matrix_factorization_privatizer(
       will be distributed according to a multivariate Gaussian with covariance
       matrix ``noising_matrix @ noising_matrix.T``.
     stddev: Standard deviation to use for the noise of this privatizer.
-    prng_key: An optional PRNGKey array representing the source of randomness.
+    rng: Optional random seed or ``numpy.random.Generator`` representing the
+      source of randomness.
+    prng_key: Deprecated; use ``rng`` instead.
     dtype: The dtype to use for intermediate noise. If specified, noise will be
       generated with this dtype, added to the input gradient according to normal
       jax type promotion rules, and then cast back to the gradient dtype.
@@ -163,13 +169,19 @@ def matrix_factorization_privatizer(
   Returns:
     An :class:`optax.GradientTransformation` which adds samples from Gaussian
     correlated by ``noising_matrix`` (i.e., samples from a Gaussian with
-    covariance ``noising_matrix @ noising_matrix.T``), keyed by ``prng_key``,
-    to its stream of gradients.
+    covariance ``noising_matrix @ noising_matrix.T``), seeded by
+    ``rng``, to its stream of gradients.
   """
-  if prng_key is None:
-    prng_key = jax.random.key(np.random.randint(0, 2**31))
-  elif isinstance(prng_key, int):
-    prng_key = jax.random.key(prng_key)
+  if prng_key is not None:
+    logging.warning('prng_key is deprecated; use rng instead.')
+    if isinstance(prng_key, jax.Array):
+      _validate.jitted(False)
+      rng = int(np.asarray(jax.random.key_data(prng_key)).flat[-1])
+    else:
+      rng = prng_key
+  if not isinstance(rng, (int, np.integer)):
+    _validate.jitted(False)
+    rng = int(_random.default_rng(rng).integers(2**31))
   if isinstance(noising_matrix, jax.typing.ArrayLike):
     impl = _dense_matrix_factorization_privatizer
   elif isinstance(noising_matrix, streaming_matrix.StreamingMatrix):
@@ -179,7 +191,7 @@ def matrix_factorization_privatizer(
 
   return impl(
       noising_matrix,
-      prng_key=prng_key,
+      seed=int(rng),
       stddev=stddev,
       strategy=intermediate_strategy.value,
       dtype=dtype,
@@ -231,7 +243,7 @@ def _dense_matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike,
     *,
     stddev: float,
-    prng_key: jax.Array,
+    seed: int,
     strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
@@ -249,7 +261,7 @@ def _dense_matrix_factorization_privatizer(
 
     target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
     noise = optax.tree.random_like(
-        rng_key=prng_key,
+        rng_key=jax.random.key(seed),
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
         dtype=dtype,
@@ -275,7 +287,7 @@ def _streaming_matrix_factorization_privatizer(
     noising_matrix: streaming_matrix.StreamingMatrix,
     *,
     stddev: float,
-    prng_key: jax.Array,
+    seed: int,
     strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
@@ -288,8 +300,10 @@ def _streaming_matrix_factorization_privatizer(
           x.shape, dtype, sharding=jax.ShapeDtypeStruct.like(x).sharding
       )
       intermediate = jax.tree.map(to_dtype, intermediate)
-    # downstream users may donate this state to JIT, so we copy prng_key here.
-    return jnp.copy(prng_key), noising_matrix.init_multiply(intermediate)
+    # Materialize the key inside init so integer seeds are not closed over as
+    # outer jax.Arrays and donated state buffers always start from a fresh copy.
+    state = noising_matrix.init_multiply(intermediate)
+    return jax.random.key(seed), state
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
