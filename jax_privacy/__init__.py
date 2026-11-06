@@ -31,4 +31,4 @@ from .execution_plan import BandMFConfig
 from .execution_plan import PerformanceFlags
 from .training import DPTrainer
 
-__version__ = '2.3.0.dev0'
+__version__ = '2.4.0'
