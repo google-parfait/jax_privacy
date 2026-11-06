@@ -32,7 +32,7 @@ permissions:
 jobs:
   check_rebase:
     name: "Check Branch Sync"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout code
@@ -67,7 +67,7 @@ jobs:
           fi
   markdown-lint:
     name: "Lint: Markdown"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -81,7 +81,7 @@ jobs:
 
   check-lockfile:
     name: "Check: pylock.toml Sync"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -121,7 +121,7 @@ jobs:
 
   lint:
     name: "Lint: Python 3.11"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -157,7 +157,7 @@ jobs:
 
   test:
     name: "Unit Test: Python ${{ matrix.python-version }} on ${{ matrix.os }}"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -192,7 +192,7 @@ jobs:
 
   matrix-tests:
     name: "Heavy Tests: Linux Only"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -218,7 +218,7 @@ jobs:
 
   docs:
     name: "Docs: Python 3.11"
-    runs-on: large-4cpu-16gbRAM-150gbSSD-ubuntu24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
