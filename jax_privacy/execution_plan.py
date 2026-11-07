@@ -617,7 +617,7 @@ class BandMFConfig:
         stddev=float(
             self.noise_multiplier * query_sensitivity * max_column_norm
         ),
-        prng_key=noise_seed,
+        rng=noise_seed,
         dtype=performance_flags.dtype,
         intermediate_strategy=performance_flags.intermediate_strategy,
     )

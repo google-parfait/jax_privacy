@@ -67,7 +67,7 @@ def main(_):
         dataset,
         strategy,
         padding_example=dataset[0],
-        rng=0,
+        rng=np.random.default_rng(0),
         pad_to_multiple_of=32,
         max_workers=max_workers,
     )

@@ -41,39 +41,33 @@ _PARAM_SHAPES = {
 }
 
 
-def gaussian_privatizer_fn(prng_key: jax.Array | None = None):
-  if prng_key is None:
-    prng_key = jax.random.key(_SEED)
-  return noise_addition.gaussian_privatizer(prng_key=prng_key, stddev=_STDDEV)
+def gaussian_privatizer_fn(rng: int = _SEED):
+  return noise_addition.gaussian_privatizer(rng=rng, stddev=_STDDEV)
 
 
 def dense_matrix_factorization_privatizer_fn(
     noising_matrix: jax.Array | None = None,
-    prng_key: jax.Array | None = None,
+    rng: int = _SEED,
     stddev: float = _STDDEV,
 ):
-  if prng_key is None:
-    prng_key = jax.random.key(_SEED)
   if noising_matrix is None:
     noising_matrix = jnp.eye(_ITERATIONS) + 0.1
   return noise_addition.matrix_factorization_privatizer(
       noising_matrix,
-      prng_key=prng_key,
+      rng=rng,
       stddev=stddev,
   )
 
 
 def streaming_matrix_factorization_privatizer_fn(
     noising_matrix: streaming_matrix.StreamingMatrix | None = None,
-    prng_key: jax.Array | None = None,
+    rng: int = _SEED,
 ):
   if noising_matrix is None:
     noising_matrix = streaming_matrix.momentum_sgd_matrix(momentum=0.95)
-  if prng_key is None:
-    prng_key = jax.random.key(_SEED)
   return noise_addition.matrix_factorization_privatizer(
       noising_matrix,
-      prng_key=prng_key,
+      rng=rng,
       stddev=_STDDEV,
   )
 
@@ -95,7 +89,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected 2D'):
       noise_addition.matrix_factorization_privatizer(
           jnp.ones(10),
-          prng_key=jax.random.key(10),
+          rng=10,
           stddev=0.0,
       )
 
@@ -212,9 +206,9 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
   @parameterized.parameters(*_PRIVATIZER_FNS)
   def test_noise_unique(self, privatizer_fn):
-    # Tests uniqueness across iterations, indices, pytree leaves, and prng_key.
-    privatizer1 = privatizer_fn(prng_key=jax.random.key(1234))
-    privatizer2 = privatizer_fn(prng_key=jax.random.key(5678))
+    # Tests uniqueness across iterations, indices, pytree leaves, and seeds.
+    privatizer1 = privatizer_fn(rng=1234)
+    privatizer2 = privatizer_fn(rng=5678)
     grads = {'a': jnp.zeros(4), 'b': jnp.zeros(4)}
 
     values = []
@@ -240,13 +234,11 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
   )
   def test_scale_invariance(self, noising_matrix):
     # Test equivalence between modifying stddev or noising_matrix.
-    key = jax.random.key(_SEED)
-
     privatizer0 = noise_addition.matrix_factorization_privatizer(
-        noising_matrix=noising_matrix, prng_key=key, stddev=_STDDEV
+        noising_matrix=noising_matrix, rng=_SEED, stddev=_STDDEV
     )
     privatizer1 = noise_addition.matrix_factorization_privatizer(
-        noising_matrix=noising_matrix * _STDDEV, prng_key=key, stddev=1.0
+        noising_matrix=noising_matrix * _STDDEV, rng=_SEED, stddev=1.0
     )
 
     params = jnp.zeros(10)
@@ -270,7 +262,7 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
     def get_noise_sample(noising_matrix):
       privatizer = noise_addition.matrix_factorization_privatizer(
-          noising_matrix=noising_matrix, prng_key=0, stddev=1.0
+          noising_matrix=noising_matrix, rng=0, stddev=1.0
       )
       params = jnp.zeros(10)
       state = privatizer.init(params)
@@ -288,10 +280,8 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
       ('streaming_identity', streaming_matrix.identity()),
   )
   def test_optax_chain(self, noising_matrix):
-    key = jax.random.key(_SEED)
-
     privatizer = noise_addition.matrix_factorization_privatizer(
-        noising_matrix=noising_matrix, prng_key=key, stddev=_STDDEV
+        noising_matrix=noising_matrix, rng=_SEED, stddev=_STDDEV
     )
     optimizer = optax.adamw(learning_rate=0.1)
     noisy_optimizer = optax.chain(privatizer, optimizer)
@@ -301,6 +291,18 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     update, state1 = noisy_optimizer.update(params, state0, params)
     chex.assert_trees_all_equal_shapes_and_dtypes(state0, state1)
     chex.assert_trees_all_equal_shapes_and_dtypes(update, params)
+
+  def test_deprecated_prng_key_warns_and_matches_rng(self):
+    with self.assertLogs(level='WARNING') as logs:
+      p_key = noise_addition.gaussian_privatizer(
+          stddev=1.0, prng_key=jax.random.key(_SEED)
+      )
+    self.assertTrue(any('deprecated' in m for m in logs.output))
+    p_seed = noise_addition.gaussian_privatizer(stddev=1.0, rng=_SEED)
+    params = jnp.zeros(10)
+    n1, _ = p_key.update(params, p_key.init(params))
+    n2, _ = p_seed.update(params, p_seed.init(params))
+    chex.assert_trees_all_equal(n1, n2)
 
 
 if __name__ == '__main__':

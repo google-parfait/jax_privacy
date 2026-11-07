@@ -47,8 +47,8 @@ def _from_pytree(
     dataset: optax.ArrayTree,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -58,7 +58,7 @@ def _from_pytree(
   """Yields padded (batch, is_padding_example) pairs from an array PyTree."""
   del max_workers
   num_examples = _validate.batch(dataset, padding_example)
-  _validate.multihost(jax.tree.map(lambda x: x[0], dataset), rng)
+  _validate.equal_across_hosts(dataset=jax.tree.map(lambda x: x[0], dataset))
   index_iterator = strategy.batch_iterator(num_examples, rng=rng)
 
   # When sharding across a mesh (including multi-controller JAX),
@@ -90,8 +90,8 @@ def _from_pygrain(
     dataset: grain.RandomAccessDataSource,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -103,7 +103,7 @@ def _from_pygrain(
     # Assumes uniform record shapes; mismatched shapes fail downstream anyway.
     logging.info("Inferring padding_example from dataset[0].")
     padding_example = dataset[0]
-  _validate.multihost(dataset[0], rng)
+  _validate.equal_across_hosts(dataset=dataset[0])
   index_iterator = strategy.batch_iterator(len(dataset), rng=copy.deepcopy(rng))
   padding_element = jax.tree.map(
       lambda x: np.zeros(x.shape, dtype=x.dtype), padding_example
@@ -151,8 +151,8 @@ def batch_iterator(
     dataset: Any,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -173,11 +173,11 @@ def batch_iterator(
       example dimension, or a ``grain.MapDataset`` (or
       ``grain.RandomAccessDataSource``).
     strategy: Batch selection strategy producing per-step example indices.
+    rng: Random number generator for batch sampling.
     padding_example: Optional single-example PyTree specification (arrays or
       ``jax.ShapeDtypeStruct``) defining the structure, shapes, and dtypes of
       zero-padded examples. If omitted on a ``MapDataset``, it is inferred from
       ``dataset[0]``.
-    rng: Optional random seed or ``numpy.random.Generator`` for batch sampling.
     pad_to_multiple_of: Pads each batch size to a multiple of this integer.
     microbatch_size: Optional microbatch size used to reorder padding examples
       for early stopping.
