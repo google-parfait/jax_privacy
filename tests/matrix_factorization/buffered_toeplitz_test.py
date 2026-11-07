@@ -297,7 +297,7 @@ class BufferedToeplitzTest(parameterized.TestCase):
 
   @parameterized.parameters(-1, 0)
   def test_from_rational_approx_to_sqrt_x_projection_raises(self, nbuf: int):
-    with self.assertRaisesRegex(ValueError, 'num_buffers must be >= 1'):
+    with self.assertRaisesRegex(ValueError, 'Expected num_buffers='):
       buffered_toeplitz.BufferedToeplitz.from_rational_approx_to_sqrt_x(
           num_buffers=nbuf
       )

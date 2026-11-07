@@ -90,7 +90,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_confidence_interval_illegal_confidence(self):
     for confidence in [-1, 0, 1, 2]:
-      with self.assertRaisesRegex(ValueError, 'confidence must be in'):
+      with self.assertRaisesRegex(ValueError, 'Expected confidence='):
         auditing.BootstrapParams.confidence_interval(confidence=confidence)
 
   @parameterized.named_parameters(

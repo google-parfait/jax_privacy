@@ -240,8 +240,7 @@ def pad_to_multiple_of(
   """
   if indices.ndim > 1:
     raise ValueError('pad_to_multiple_of currently expects 1D indices.')
-  if multiple <= 0:
-    raise ValueError(f'Padding multiple must be positive, got {multiple}.')
+  _validate.positive(multiple=multiple)
   if microbatch_size is not None and multiple % microbatch_size != 0:
     raise ValueError(f'{multiple=} must be divisible by {microbatch_size=}.')
   curr_size = indices.shape[0]
@@ -474,18 +473,13 @@ class RandomAllocationSampling(BatchSelectionStrategy):
   sampling_prob: float = 1.0
 
   def __post_init__(self):
-    _validate.non_negative(
-        total_participations=self.total_participations,
-        iterations=self.iterations,
-    )
+    _validate.non_negative(iterations=self.iterations)
     _validate.positive(cycle_length=self.cycle_length)
     _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
     num_cycles = math.ceil(self.iterations / self.cycle_length)
-    if self.total_participations > num_cycles:
-      raise ValueError(
-          f'Expected total_participations={self.total_participations} <='
-          f' ceil(iterations / cycle_length)={num_cycles}.'
-      )
+    _validate.in_range(
+        0, num_cycles, total_participations=self.total_participations
+    )
     if self.iterations % self.cycle_length != 0:
       logging.warning(
           'iterations=%d is not a multiple of cycle_length=%d; set iterations '
@@ -568,10 +562,8 @@ class FixedBatchSampling(BatchSelectionStrategy):
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
   ) -> Iterator[np.ndarray]:
-    if not self.replace and self.batch_size > num_examples:
-      raise ValueError(
-          'batch_size must be <= num_examples when replace is False.'
-      )
+    if not self.replace:
+      _validate.in_range(0, num_examples, batch_size=self.batch_size)
     rng = np.random.default_rng(rng)
     dtype = _get_dtype(num_examples)
     for _ in range(self.iterations):
@@ -718,8 +710,7 @@ class MinSepRandomAllocation(BatchSelectionStrategy):
     )
     _validate.in_range(0, 1, sampling_prob=self.sampling_prob)
     min_iters = self.total_participations * self.min_sep
-    if self.iterations < min_iters:
-      raise ValueError(f'Expected iterations={self.iterations} >= {min_iters}.')
+    _validate.in_range(min_iters, math.inf, iterations=self.iterations)
 
   def batch_iterator(
       self, num_examples: int, rng: RngType = None
