@@ -50,9 +50,7 @@ class ExecutionPlanTest(parameterized.TestCase):
       BandMFConfig(**default_kwargs)
 
   def test_bandmf_rejects_nan_normalize_by(self):
-    with self.assertRaisesRegex(
-        ValueError, r"Expected normalize_by=nan > 0"
-    ):
+    with self.assertRaisesRegex(ValueError, r"Expected normalize_by=nan > 0"):
       BandMFConfig(
           strategy=np.linspace(1, 0, 10),
           iterations=20,
