@@ -57,8 +57,7 @@ def _validate_slack_config(
     return
   if isinstance(slack, bool) or not isinstance(slack, int):
     raise TypeError('slack must be a Python integer or None.')
-  if slack <= 0:
-    raise ValueError('slack must be positive.')
+  _validate.positive(slack=slack)
   if grid_scale is not None:
     raise ValueError('slack is not supported with discrete grid clipping.')
   # We may want to support one slack vector per leaf in the future.
@@ -278,8 +277,8 @@ def clip_pytree(
     return ClippedTreeAndNorm(clipped=clipped, norm=norms)
 
   # -- Global Norm --
-  if isinstance(clip_norm, numbers.Real) and clip_norm < 0:
-    raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
+  if isinstance(clip_norm, numbers.Real):
+    _validate.non_negative(clip_norm=clip_norm)
 
   clip_norm = jnp.maximum(clip_norm, 0.0)
   l2_norm = _compute_pytree_l2_norm(pytree)
@@ -489,17 +488,10 @@ def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
 
 def _validate_is_padding_example(is_padding_example, batch_size: int):
   """Validates the is_padding_example array."""
-  if is_padding_example.ndim != 1:
-    raise ValueError(
-        'is_padding_example must be a 1-D array, got'
-        f' ndim={is_padding_example.ndim}.'
-    )
-  if is_padding_example.shape[0] != batch_size:
-    raise ValueError(
-        f'is_padding_example has shape {is_padding_example.shape} but'
-        f' batch has size {batch_size}. The leading dimensions must'
-        ' match.'
-    )
+  _validate.ndim(1, is_padding_example=is_padding_example)
+  _validate.equal(
+      batch_size, is_padding_example_len=is_padding_example.shape[0]
+  )
   if is_padding_example.dtype != jnp.bool_:
     raise ValueError(
         'is_padding_example must have dtype bool, got'
@@ -740,14 +732,12 @@ def clipped_fun(
 
 def _validate_static_args(argnums, batch_argnums, normalize_by):
   """Validates the argnums and batch_argnums inputs are compatible."""
-  if normalize_by <= 0.0:
-    raise ValueError(f'normalize_by must be > 0, got {normalize_by}.')
+  _validate.positive(normalize_by=normalize_by)
   if isinstance(argnums, int):
     argnums = (argnums,)
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
-  if not batch_argnums:
-    raise ValueError('Batch Argnums must not be empty.')
+  _validate.non_empty(batch_argnums=batch_argnums)
   if min(argnums + batch_argnums) < 0:
     raise ValueError(
         f'argnums={argnums} and batch_argnums={batch_argnums} must be >= 0.'
