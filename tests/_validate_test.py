@@ -73,5 +73,17 @@ class ValidateTest(parameterized.TestCase):
       _validate.explicit_mesh(status=False, device_mesh=explicit)
 
 
+class PositiveTest(parameterized.TestCase):
+
+  @parameterized.parameters(1, 0.5, 1e-12)
+  def test_accepts_finite_positive(self, value):
+    _validate.positive(x=value)
+
+  @parameterized.parameters(0, -1.0, float('nan'), float('inf'))
+  def test_rejects_non_positive_or_non_finite(self, value):
+    with self.assertRaisesRegex(ValueError, r'Expected x=.* > 0'):
+      _validate.positive(x=value)
+
+
 if __name__ == '__main__':
   absltest.main()
