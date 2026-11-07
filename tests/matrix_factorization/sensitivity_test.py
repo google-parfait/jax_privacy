@@ -312,7 +312,7 @@ class FixedEpochSensitivityTest(parameterized.TestCase):
 
   @parameterized.named_parameters((f'{i} epochs', i) for i in [-3, 0])
   def test_raises_zero(self, epochs):
-    with self.assertRaisesRegex(ValueError, 'must be positive'):
+    with self.assertRaisesRegex(ValueError, 'Expected epochs='):
       sensitivity_lib.fixed_epoch_sensitivity(jnp.eye(16), epochs=epochs)
 
   @parameterized.named_parameters((f'{i} epochs', i) for i in [3, 7, 14])

@@ -252,11 +252,8 @@ def minimum_samples_per_verification(
   Returns:
     The number of samples for each verification.
   """
-  _validate.in_range(
-      0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
-  )
-  if target_delta <= base_delta:
-    raise ValueError('target_delta must be > base_delta.')
+  _validate.in_range(0, 1, closed='right', base_delta=base_delta)
+  _validate.in_range(base_delta, 1, closed='right', target_delta=target_delta)
   _validate_support_bound(support_bounds, target_delta)
   support_bounds = np.asarray(support_bounds, dtype=float)
   max_support_bound = np.max(support_bounds)

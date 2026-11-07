@@ -379,7 +379,7 @@ class ToeplitzTest(parameterized.TestCase):
     )
 
   def test_sensitivity_squared_bad_min_sep(self):
-    with self.assertRaisesRegex(ValueError, 'min_sep must be positive'):
+    with self.assertRaisesRegex(ValueError, 'Expected min_sep='):
       toeplitz.minsep_sensitivity_squared(strategy_coef=[1.0], min_sep=0, n=1)
 
   @parameterized.product(
