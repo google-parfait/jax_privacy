@@ -75,7 +75,7 @@ def equal(expected, **kwargs):
       )
 
 
-def tree_structure(reference, **kwargs):
+def same_tree_structure(reference, **kwargs):
   """Validates that all values have the same PyTree structure as reference."""
   expected = jax.tree.structure(reference)
   for name, value in kwargs.items():
@@ -100,7 +100,7 @@ def is_none(context: str = '', **kwargs):
       raise ValueError(f'Expected {name}={value} to be None. {context}')
 
 
-def batch(pytree, padding_example=None) -> int:
+def batched(pytree, padding_example=None) -> int:
   """Validates a batch pytree and returns the batch size.
 
   Checks that the pytree has at least one leaf, all leaves are arrays with
@@ -142,7 +142,7 @@ def batch(pytree, padding_example=None) -> int:
         f'got sizes: {sorted(sizes)}.'
     )
   if padding_example is not None:
-    tree_structure(padding_example, dataset=pytree)
+    same_tree_structure(padding_example, dataset=pytree)
     data_meta = [(x.shape[1:], x.dtype) for x in leaves]
     pad_meta = [(x.shape, x.dtype) for x in jax.tree.leaves(padding_example)]
     equal(pad_meta, dataset_shape_dtype=data_meta)
@@ -162,19 +162,19 @@ def multihost(first_example, rng):
     )
 
 
-def strategy(value, max_size):
+def bounded_1d(strategy, max_size):
   """Validates BandMF strategy coefficients.
 
   Checks that the strategy is a 1D array with size in ``[1, max_size]``.
 
   Args:
-    value: The strategy coefficients as an array-like.
+    strategy: The strategy coefficients as an array-like.
     max_size: The maximum allowed size (typically the number of iterations).
 
   Raises:
     ValueError: If the strategy is not 1D or its size is out of range.
   """
-  arr = np.asarray(value)
+  arr = np.asarray(strategy)
   if arr.ndim != 1:
     raise ValueError(f'strategy must be a 1D array, got {arr.ndim}D.')
   if arr.size == 0 or arr.size > max_size:
@@ -183,7 +183,7 @@ def strategy(value, max_size):
     )
 
 
-def multi_owner(example_ids, user_ids):
+def unique_edge_pairs(example_ids, user_ids):
   """Validates parallel edge-list arrays for a MultiOwnerGraph."""
   example_ids = np.asarray(example_ids)
   user_ids = np.asarray(user_ids)

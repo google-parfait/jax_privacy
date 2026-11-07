@@ -334,7 +334,7 @@ class DPTrainer:
     """
     if (n := getattr(self.config, "num_examples", None)) is not None:
       is_map = _data_loading.is_map_dataset(dataset)
-      m = len(dataset) if is_map else _validate.batch(dataset)
+      m = len(dataset) if is_map else _validate.batched(dataset)
       _validate.equal(n, num_examples=m)
     # Precompilation resolves the trainer and compiles the required train_steps.
     # It may return a *different* trainer (e.g. AutotuneMicrobatch picks a
@@ -403,7 +403,7 @@ def _score_canaries(
     prng_key: jax.Array,
 ) -> jax.Array:
   """Computes per-canary loss reductions ``loss(untrained) - loss(trained)``."""
-  n = _validate.batch(canaries)
+  n = _validate.batched(canaries)
   mb = microbatch_size or 1
   idx = jax_privacy.batch_selection.pad_to_multiple_of(np.arange(n), mb)
 

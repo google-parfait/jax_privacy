@@ -152,7 +152,7 @@ def _dry_run_state(
   if _data_loading.is_map_dataset(dataset):
     n = len(dataset)
   else:
-    n = _validate.batch(dataset, padding_example)
+    n = _validate.batched(dataset, padding_example)
   state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
   key = jax.ShapeDtypeStruct.like(jax.random.key(seed))
   return rng, n, state, key

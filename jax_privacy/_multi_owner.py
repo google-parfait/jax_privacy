@@ -73,7 +73,7 @@ class MultiOwnerGraph:
 
   def __post_init__(self):
     if self.validate:
-      _validate.multi_owner(self.example_ids, self.user_ids)
+      _validate.unique_edge_pairs(self.example_ids, self.user_ids)
 
   @property
   def num_examples(self) -> int:

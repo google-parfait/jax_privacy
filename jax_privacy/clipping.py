@@ -649,7 +649,7 @@ def clipped_fun(
   fun = _normalize_fun_to_return_aux(fun, has_aux)
 
   def clipped_fn(*args, is_padding_example=None, **kwargs):
-    batch_size = _validate.batch([args[i] for i in batch_argnums])
+    batch_size = _validate.batched([args[i] for i in batch_argnums])
     if is_padding_example is None:
       is_padding_example = jnp.zeros(batch_size, dtype=jnp.bool_)
     else:
