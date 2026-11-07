@@ -75,6 +75,16 @@ def equal(expected, **kwargs):
       )
 
 
+def ndim(expected: int, **kwargs):
+  """Validates that all values have ``expected`` dimensions."""
+  for name, value in kwargs.items():
+    actual = np.ndim(value)
+    if actual != expected:
+      raise ValueError(
+          f'Expected {name} to have ndim={expected}, got {actual}.'
+      )
+
+
 def same_tree_structure(reference, **kwargs):
   """Validates that all values have the same PyTree structure as reference."""
   expected = jax.tree.structure(reference)
@@ -175,8 +185,7 @@ def bounded_1d(strategy, max_size):
     ValueError: If the strategy is not 1D or its size is out of range.
   """
   arr = np.asarray(strategy)
-  if arr.ndim != 1:
-    raise ValueError(f'strategy must be a 1D array, got {arr.ndim}D.')
+  ndim(1, strategy=arr)
   if arr.size == 0 or arr.size > max_size:
     raise ValueError(
         f'strategy size must be in [1, {max_size}], got {arr.size}.'
@@ -187,8 +196,7 @@ def unique_edge_pairs(example_ids, user_ids):
   """Validates parallel edge-list arrays for a MultiOwnerGraph."""
   example_ids = np.asarray(example_ids)
   user_ids = np.asarray(user_ids)
-  if example_ids.ndim != 1 or user_ids.ndim != 1:
-    raise ValueError('example_ids and user_ids must be 1D arrays.')
+  ndim(1, example_ids=example_ids, user_ids=user_ids)
   if len(example_ids) != len(user_ids):
     raise ValueError('example_ids and user_ids must have the same length')
   if len(example_ids) == 0:

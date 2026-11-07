@@ -26,6 +26,7 @@ from typing import Any, TypeAlias
 from absl import logging
 import jax
 import jax.numpy as jnp
+from jax_privacy import _validate
 import numpy as np
 import optax
 
@@ -306,8 +307,7 @@ class BufferedToeplitz:
     # Note: Following Prop 4.5, we actually construct a BLT for
     # C^{-1} based on the rational function approximation of sqrt(1 - x),
     # and then take the inverse.
-    if num_buffers < 1:
-      raise ValueError('num_buffers must be >= 1.')
+    _validate.positive(num_buffers=num_buffers)
 
     degree = num_buffers
     d1 = (degree + 1) // 2
