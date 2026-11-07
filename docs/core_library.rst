@@ -45,6 +45,12 @@ Individual Components
   auditing
   matrix_factorization
 
+.. seealso::
+
+   :doc:`/matrix_factorization` for notation, participation schemas, and
+   parameterized matrix classes used by
+   :mod:`jax_privacy.matrix_factorization`.
+
 Experimental Modules
 --------------------
 .. autosummary::

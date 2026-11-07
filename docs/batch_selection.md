@@ -43,7 +43,8 @@ JAX Privacy supports two noise addition paradigms:
 *   **DP-MF** (correlated noise via Matrix Factorization): Noise is correlated
     across steps using a lower-triangular matrix, which can reduce total error.
     See [Pillutla+ 2025](#pillutla-2025) for an introduction and survey, the
-    {mod}`~jax_privacy.matrix_factorization` module, and
+    {mod}`~jax_privacy.matrix_factorization` module, the
+    {doc}`Matrix Factorization notation </matrix_factorization>` page, and
     {func}`~jax_privacy.noise_addition.matrix_factorization_privatizer` in
     {mod}`~jax_privacy.noise_addition`.
 
