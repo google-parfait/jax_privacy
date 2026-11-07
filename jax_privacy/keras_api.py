@@ -102,10 +102,13 @@ class DPKerasConfig:
         try to train the model for more steps, it will fail. Because one
         optimizer update consumes ``gradient_accumulation_steps`` batches, this
         is the number of optimizer updates, not the number of (micro-)batches.
-        If you train by epochs, then it is epochs * (train_size //
-        effective_batch_size), where effective_batch_size = batch_size *
-        gradient_accumulation_steps (this reduces to epochs * (train_size //
-        batch_size) only when gradient_accumulation_steps == 1). If you train
+        If you train by epochs, then it is (epochs * (train_size //
+        batch_size)) // gradient_accumulation_steps: Keras carries leftover
+        accumulated micro-batches over to the next epoch, so this can be larger
+        than epochs * (train_size // effective_batch_size), where
+        effective_batch_size = batch_size * gradient_accumulation_steps. With
+        ``poisson_sampling_in_fit=True``, each epoch has exactly (train_size //
+        effective_batch_size) optimizer updates. If you train
         while the dataset iterator is not over, then it is the number of
         optimizer updates the iterator produces, i.e. its (micro-)batch length
         // gradient_accumulation_steps.
@@ -707,16 +710,36 @@ def _create_fit_fn_with_validation(
         train_size=validated_train_size,
     )
 
-    performed_optimizer_steps = (
+    gradient_accumulation_steps = (
+        self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
+    )
+    if use_poisson_sampling_in_fit:
+      default_steps_per_epoch = (
+          _get_default_steps_per_epoch(
+              validated_train_size,
+              self._dp_params.effective_batch_size,  # pylint: disable=protected-access
+          )
+          * gradient_accumulation_steps
+      )
+    else:
+      default_steps_per_epoch = None
+    # `_optimizer_steps` counts train_step calls, i.e. micro-batches. Keras
+    # applies an optimizer update every `gradient_accumulation_steps` of them,
+    # and `DPKerasConfig.train_steps` counts optimizer updates.
+    performed_microbatch_steps = (
         _get_non_trainable_weight('_optimizer_steps', self).numpy().item()
+    )
+    performed_optimizer_steps = (
+        performed_microbatch_steps // gradient_accumulation_steps
     )
     optimizer_steps_to_perform = _calculate_optimizer_steps_to_perform_in_fit(
         self._dp_params.train_size,  # pylint: disable=protected-access
         batch_size,
         epochs,
         initial_epoch,
-        steps_per_epoch,
-        gradient_accumulation_steps=self._dp_params.gradient_accumulation_steps,  # pylint: disable=protected-access
+        steps_per_epoch or default_steps_per_epoch,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        performed_microbatch_steps=performed_microbatch_steps,
     )
     if (
         performed_optimizer_steps + optimizer_steps_to_perform
@@ -736,13 +759,6 @@ def _create_fit_fn_with_validation(
           f' total_train_steps={self._dp_params.train_steps}.'  # pylint: disable=protected-access
       )
     if use_poisson_sampling_in_fit:
-      default_steps_per_epoch = (
-          _get_default_steps_per_epoch(
-              validated_train_size,
-              self._dp_params.effective_batch_size,  # pylint: disable=protected-access
-          )
-          * self._dp_params.gradient_accumulation_steps  # pylint: disable=protected-access
-      )
       poisson_dataset = _PoissonSampledTrainingDataset(
           x,
           y,
@@ -1111,19 +1127,39 @@ def _calculate_optimizer_steps_to_perform_in_fit(
     initial_epoch: int,
     steps_per_epoch: int | None,
     gradient_accumulation_steps: int = 1,
+    performed_microbatch_steps: int = 0,
 ) -> int:
-  """Returns the number of optimizer steps that will be performed by fit."""
+  """Returns the number of optimizer updates that fit() will perform.
+
+  Keras keeps the gradient-accumulation state across epochs and across fit()
+  calls, so it applies an update after every ``gradient_accumulation_steps``-th
+  micro-batch counted from the start of training. Rounding per epoch instead
+  would undercount the updates (and overspend the privacy budget) when an
+  epoch's micro-batches are not a multiple of ``gradient_accumulation_steps``.
+
+  Args:
+    train_size: The number of training examples.
+    batch_size: The (micro-)batch size.
+    epochs: The ``epochs`` argument of fit().
+    initial_epoch: The ``initial_epoch`` argument of fit().
+    steps_per_epoch: Micro-batches per epoch, or None for ``train_size //
+      batch_size``.
+    gradient_accumulation_steps: Micro-batches per optimizer update.
+    performed_microbatch_steps: Micro-batches already run before this fit().
+
+  Returns:
+    The number of optimizer updates this fit() will perform.
+  """
   epochs_to_perform = epochs - initial_epoch
   if steps_per_epoch is None:
-    effective_batch_size = batch_size * gradient_accumulation_steps
-    optimizer_steps_per_epoch = _get_default_steps_per_epoch(
-        train_size, effective_batch_size
-    )
-  else:
-    optimizer_steps_per_epoch = math.ceil(
-        steps_per_epoch / gradient_accumulation_steps
-    )
-  return optimizer_steps_per_epoch * epochs_to_perform
+    steps_per_epoch = _get_default_steps_per_epoch(train_size, batch_size)
+  total_microbatch_steps = (
+      performed_microbatch_steps + steps_per_epoch * epochs_to_perform
+  )
+  return (
+      total_microbatch_steps // gradient_accumulation_steps
+      - performed_microbatch_steps // gradient_accumulation_steps
+  )
 
 
 def _get_default_steps_per_epoch(train_size: int, batch_size: int) -> int:
