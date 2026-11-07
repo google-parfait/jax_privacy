@@ -16,6 +16,7 @@ name: ci
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
   push:
@@ -41,7 +42,13 @@ jobs:
           persist-credentials: false
 
       - name: Check if PR is up to date
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          if [ "$PR_AUTHOR" = "copybara-service[bot]" ]; then
+            echo "Automated sync PR; skipping branch sync check."
+            exit 0
+          fi
           git fetch origin main
           BEHIND=$(git rev-list --count HEAD..origin/main)
           if [ "$BEHIND" -gt 0 ]; then
@@ -179,13 +186,12 @@ jobs:
       - name: Run Standard Tests (Linux)
         if: runner.os == 'Linux'
         run: |
-          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test and not keras_api_e2e_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
-          pytest -n auto tests/ -k "distributed_noise_generation_test" --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
-          pytest -n auto tests/ -k "sharding_utils_test" --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest -n auto tests/ -k "not matrix_factorization and not distributed_noise_generation_test and not sharding_utils_test and not _random_test and not keras_api_e2e_test" --junitxml=report1.xml --cov=jax_privacy --cov-report=xml
+          pytest -n auto tests/distributed_noise_generation_test.py --junitxml=report2.xml --cov=jax_privacy --cov-report=xml --cov-append
+          pytest -n auto tests/sharding_utils_test.py tests/_random_test.py --junitxml=report3.xml --cov=jax_privacy --cov-report=xml --cov-append
 
   matrix-tests:
     name: "Heavy Tests: Linux Only"
-    needs: [check_rebase, lint]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -212,7 +218,6 @@ jobs:
 
   docs:
     name: "Docs: Python 3.11"
-    needs: [check_rebase, lint]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

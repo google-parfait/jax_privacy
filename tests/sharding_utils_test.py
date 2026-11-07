@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from absl.testing import absltest
-from absl.testing import parameterized
 import chex
 import jax
 import jax.numpy as jnp
@@ -110,86 +109,6 @@ class ShardingTest(absltest.TestCase):
           is_padding[perm], microbatch_size
       )
       chex.assert_trees_all_equal(actual, expected)
-
-
-class RandomTest(parameterized.TestCase):
-
-  def setUp(self):
-    super().setUp()
-    chex.set_n_cpu_devices(8)
-
-    axis_types = (jax.sharding.AxisType.Explicit,) * 2
-    self.mesh = jax.make_mesh((4, 2), ('x', 'y'), axis_types=axis_types)
-    jax.set_mesh(self.mesh)
-
-  def test_uniqueness(self):
-    rng = np.random.default_rng(42)
-    shape = (104,)
-    sharding = jax.sharding.NamedSharding(
-        self.mesh, jax.sharding.PartitionSpec(('x', 'y'))
-    )
-
-    sample1 = sharding_utils._parallel_sample(rng, shape, sharding)
-    sample2 = sharding_utils._parallel_sample(rng, shape, sharding)
-    combined = jnp.concatenate([sample1, sample2])
-    # Assert uniqueness within and across samples
-    self.assertLen(np.unique(combined), combined.size)
-
-  @parameterized.parameters(
-      {'shape': (20,), 'pspec': jax.sharding.PartitionSpec('x')},
-      {'shape': (16, 8), 'pspec': jax.sharding.PartitionSpec('x', 'y')},
-      {'shape': (8, 8, 4), 'pspec': jax.sharding.PartitionSpec('x', None, 'y')},
-  )
-  def test_arbitrary_shapes_and_outputs(self, shape, pspec):
-    rng = np.random.default_rng(42)
-    sharding = jax.sharding.NamedSharding(self.mesh, pspec)
-
-    output = sharding_utils._parallel_sample(
-        rng, shape, sharding, dtype=jnp.float32
-    )
-
-    self.assertEqual(output.shape, shape)
-    self.assertEqual(output.dtype, jnp.float32)
-    self.assertEqual(output.sharding, sharding)
-
-  def test_statistics(self):
-    rng = np.random.default_rng(123)
-    shape = (100000,)
-    sharding = jax.sharding.NamedSharding(
-        self.mesh, jax.sharding.PartitionSpec(('x', 'y'))
-    )
-
-    output = sharding_utils._parallel_sample(
-        rng, shape, sharding, sampler=np.random.Generator.standard_normal
-    )
-
-    mean = jnp.mean(output)
-    std = jnp.std(output)
-
-    np.testing.assert_allclose(mean, 0.0, atol=0.02)
-    np.testing.assert_allclose(std, 1.0, atol=0.02)
-
-  def test_pytree_structures(self):
-    rng = np.random.default_rng(42)
-    sharding_a = jax.sharding.NamedSharding(
-        self.mesh, jax.sharding.PartitionSpec('x', 'y')
-    )
-    sharding_b = jax.sharding.NamedSharding(
-        self.mesh, jax.sharding.PartitionSpec('x')
-    )
-
-    struct = {
-        'a': jax.ShapeDtypeStruct((32, 32), jnp.float32, sharding=sharding_a),
-        'b': jax.ShapeDtypeStruct((16,), jnp.float32, sharding=sharding_b),
-    }
-
-    output = sharding_utils.parallel_sample_pytree(rng, struct)
-
-    self.assertIsInstance(output, dict)
-    self.assertEqual(output['a'].shape, (32, 32))
-    self.assertEqual(output['a'].sharding, sharding_a)
-    self.assertEqual(output['b'].shape, (16,))
-    self.assertEqual(output['b'].sharding, sharding_b)
 
 
 if __name__ == '__main__':

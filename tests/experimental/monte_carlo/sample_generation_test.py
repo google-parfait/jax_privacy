@@ -127,6 +127,37 @@ def _brute_force_b_min_sep_privacy_loss(
 
 class SampleGenerationTest(parameterized.TestCase):
 
+  @parameterized.product(
+      iterations=[1, 4, 7],
+      kernel_size=[0, 1, 3, 4, 9],
+      num_shifts=[None, 1, 3, 7, 11],
+  )
+  def test_sliding_dot_products_and_squared_norms(
+      self, iterations, kernel_size, num_shifts
+  ):
+    rng = np.random.default_rng(0xBAD5EED)
+    samples = rng.normal(size=(iterations, 3))
+    kernel = rng.normal(size=kernel_size)
+    dot_products, squared_norms = (
+        sample_generation._sliding_dot_products_and_squared_norms(
+            samples, kernel, num_shifts
+        )
+    )
+    # Brute force: k_i is the kernel shifted down by i rounds and cut off at
+    # the last round.
+    if num_shifts is None:
+      num_shifts = iterations
+    shifted_kernels = np.zeros((num_shifts, iterations))
+    for i in range(num_shifts):
+      size = max(min(kernel_size, iterations - i), 0)
+      shifted_kernels[i, i : i + size] = kernel[:size]
+    np.testing.assert_allclose(
+        dot_products, shifted_kernels @ samples, atol=1e-10
+    )
+    np.testing.assert_allclose(
+        squared_norms, (shifted_kernels**2).sum(axis=1), atol=1e-10
+    )
+
   @parameterized.parameters(
       (True, np.array([1.0]), np.array([1.0, 0.0, 1.0, 0.0])),
       (True, np.array([1.0, 0.5]), np.array([1.0, 0.5, 1.0, 0.5])),
@@ -523,6 +554,38 @@ class SampleGenerationTest(parameterized.TestCase):
         c_col,
     )
     np.testing.assert_allclose(privacy_loss, expected_privacy_loss, atol=1e-6)
+
+  @parameterized.named_parameters(
+      ('dp_sgd', 7, 3, [1.0], 1.0),
+      ('bands_below_cycle', 7, 3, [1.0, 0.5], 1.0),
+      ('bands_equal_cycle', 9, 3, [1.0, 0.5, 0.25], 1.0),
+      ('bands_above_cycle', 10, 3, [1.0, 0.5, 0.25, 0.125, 0.0625], 1.0),
+      ('single_epoch', 6, 6, [1.0, 0.5, 0.25], 1.0),
+      ('cycle_above_iterations', 4, 6, [1.0, 0.5], 1.0),
+      ('c_col_above_iterations', 3, 2, [1.0, 0.5, 0.25, 0.125], 1.0),
+      ('mode_scale', 8, 3, [1.0, 0.5, 0.25], 2.5),
+      ('negative_mode_scale', 8, 3, [1.0, 0.5, 0.25], -0.5),
+  )
+  def test_compute_privacy_loss_balls_in_bins_matches_dense_modes(
+      self, iterations, cycle_length, c_col, mode_scale
+  ):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=cycle_length, iterations=iterations
+    )
+    noise_multiplier, c_col = 0.8, np.array(c_col)
+    samples = np.random.default_rng(0xBAD5EED).normal(size=(iterations, 5))
+    privacy_loss = sample_generation.compute_privacy_loss(
+        sampling_scheme, samples, noise_multiplier, c_col, mode_scale=mode_scale
+    )
+    # Brute-force log P_w(y) / Q(y) by multiplying by the dense mode matrix.
+    modes = mode_scale * sample_generation.balls_in_bins_modes(
+        sampling_scheme, c_col
+    )
+    llrs = (2 * modes.T @ samples - (modes**2).sum(axis=0)[:, None]) / (
+        2 * noise_multiplier**2
+    )
+    expected = scipy.special.logsumexp(llrs, axis=0) - np.log(cycle_length)
+    np.testing.assert_allclose(privacy_loss, expected, atol=1e-10)
 
   @parameterized.parameters(0.5, 1.0, 1.5, -0.5)
   def test_compute_privacy_loss_balls_in_bins_mode_scale(self, mode_scale):
@@ -936,5 +999,5 @@ class SampleGenerationTest(parameterized.TestCase):
     _, _ = sample
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   absltest.main()

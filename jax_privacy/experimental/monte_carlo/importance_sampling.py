@@ -40,34 +40,22 @@ Currently only :class:`~jax_privacy.batch_selection.BallsInBinsSampling` is
 supported, since the mixture modes must be enumerable.
 """
 
-import dataclasses
-
+import dp_accounting
 import numpy as np
 import scipy as sp
 
 from ... import _validate
 from ... import batch_selection
+from . import delta_calculation
 from . import sample_generation
 
 
-@dataclasses.dataclass(frozen=True)
-class ImportanceSample:
-  r"""Importance-weighted privacy loss samples.
-
-  Attributes:
-    privacy_loss: The privacy loss of each sample, i.e. :math:`\ln(P(y)/Q(y))`
-      for positive samples and :math:`\ln(Q(y)/P(y))` for negative samples, as
-      returned by :func:`~.sample_generation.get_privacy_loss_sample`.
-    log_weights: The log of the evaluation density over the proposal density for
-      each sample, to be passed as ``log_weights`` to
-      :func:`~.delta_calculation.delta_from_epsilon_and_samples`.
-    support_bound: An upper bound on each weighted hockey-stick sample, to be
-      passed as ``support_bound`` to :mod:`~.delta_calculation` functions.
-  """
-
-  privacy_loss: np.ndarray
-  log_weights: np.ndarray
-  support_bound: float
+def _validate_balls_in_bins(strategy) -> None:
+  if not isinstance(strategy, batch_selection.BallsInBinsSampling):
+    raise ValueError(
+        'Importance sampling is only supported for balls-in-bins sampling, got'
+        f' {type(strategy)}.'
+    )
 
 
 def log_support_bound(alpha: float, epsilon: float, kappa: float) -> float:
@@ -149,14 +137,101 @@ def compute_kappa(
     :math:`\kappa = \max_i \|c_i\|_2^2 / \sigma^2` over the modes :math:`c_i`
     of the positive distribution in the dominating pair.
   """
-  if not isinstance(strategy, batch_selection.BallsInBinsSampling):
-    raise ValueError(
-        'Importance sampling is only supported for balls-in-bins sampling, got'
-        f' {type(strategy)}.'
-    )
+  _validate_balls_in_bins(strategy)
   _validate.positive(noise_multiplier=noise_multiplier)
   modes = sample_generation.balls_in_bins_modes(strategy, c_col)
   return np.max(np.sum(modes**2, axis=0)) / noise_multiplier**2
+
+
+def support_bound(
+    strategy: batch_selection.BallsInBinsSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    epsilon: float,
+) -> float:
+  """The support bound :func:`get_importance_sampled_privacy_loss` achieves.
+
+  This is the bound at the :func:`optimal_stretch` when importance sampling is
+  worthwhile, and otherwise 1, since plain Monte Carlo is used instead. Knowing
+  it ahead of sampling allows sizing the sample, see
+  :func:`~.delta_calculation.minimum_samples_to_calibrate`.
+
+  Args:
+    strategy: The balls-in-bins sampling strategy.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of ``c_col``.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+    epsilon: The epsilon at which the hockey-stick divergence will be estimated.
+
+  Returns:
+    The support bound of the samples drawn with the default stretch factor.
+  """
+  _, log_bound = _stretch_and_log_bound(
+      strategy, noise_multiplier, c_col, epsilon
+  )
+  return float(np.exp(log_bound))
+
+
+def _stretch_and_log_bound(
+    strategy: batch_selection.BallsInBinsSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    epsilon: float,
+    alpha: float | None = None,
+) -> tuple[float, float]:
+  """The stretch factor to sample with and the log of its support bound."""
+  kappa = compute_kappa(strategy, noise_multiplier, c_col)
+  if alpha is None:
+    alpha = optimal_stretch(epsilon, kappa)
+  log_bound = log_support_bound(alpha, epsilon, kappa)  # Validates alpha >= 1.
+  # An importance-sampled draw costs two density evaluations instead of one, so
+  # it only pays off with a support bound below 1/2; otherwise sample plainly.
+  return (alpha, log_bound) if log_bound < np.log(0.5) else (1.0, 0.0)
+
+
+def reverse_divergence_bound(
+    strategy: batch_selection.BallsInBinsSampling,
+    noise_multiplier: float,
+    c_col: np.ndarray,
+    epsilon: float,
+) -> float:
+  """Upper bound on the reverse hockey-stick divergence, without sampling.
+
+  Monte Carlo accounting must estimate the hockey-stick divergence in both
+  directions of the dominating pair. The reverse direction is typically far
+  smaller than the forward one, and this bound is often enough to show it meets
+  the threshold the forward direction is verified against (the base delta of
+  :mod:`~.delta_calculation`), in which case only the forward direction needs
+  sampling.
+  The bound is exact for a single mode and informative when
+  :func:`compute_kappa` is below roughly ``2 * epsilon``, the same regime in
+  which importance sampling is worthwhile.
+
+  Args:
+    strategy: The balls-in-bins sampling strategy.
+    noise_multiplier: The noise multiplier of DP-MF. This is multiplied by the
+      clip norm, not accounting for the norm of ``c_col``.
+    c_col: The non-zero entries in the first column of C. Should be non-negative
+      and 1D.
+    epsilon: The epsilon of the hockey-stick divergence.
+
+  Returns:
+    An upper bound on the reverse hockey-stick divergence, or the trivial bound
+    1 when it is uninformative.
+  """
+  _validate_balls_in_bins(strategy)
+  _validate.positive(noise_multiplier=noise_multiplier)
+  modes = sample_generation.balls_in_bins_modes(strategy, c_col)
+  sensitivity = np.linalg.norm(modes.mean(axis=1))
+  # Half the mean squared distance of the modes from their mean, in noise units.
+  shift = (np.mean(np.sum(modes**2, axis=0)) - sensitivity**2) / (
+      2 * noise_multiplier**2
+  )
+  if epsilon <= shift:
+    return 1.0
+  sigma = noise_multiplier / sensitivity if sensitivity > 0 else np.inf
+  return float(dp_accounting.get_delta_gaussian(epsilon - shift, sigma))
 
 
 def get_importance_sampled_privacy_loss(
@@ -168,7 +243,7 @@ def get_importance_sampled_privacy_loss(
     seed: sample_generation.Seed = None,
     positive_sample: bool = True,
     num_samples: int = 1,
-) -> ImportanceSample:
+) -> delta_calculation.PrivacyLossSamples:
   r"""Returns importance-weighted samples from the dominating PLD of DP-BandMF.
 
   This is the importance sampling analogue of
@@ -184,9 +259,8 @@ def get_importance_sampled_privacy_loss(
     ...     cycle_length=2, iterations=4)
     >>> positive = get_importance_sampled_privacy_loss(
     ...     strategy, noise_multiplier=1.0, c_col=np.array([1.0, 0.5]),
-    ...     epsilon=1.0, seed=0, num_samples=1000)
-    >>> delta = delta_calculation.delta_from_epsilon_and_samples(
-    ...     1.0, positive.privacy_loss, log_weights=positive.log_weights)
+    ...     epsilon=2.0, seed=0, num_samples=1000)
+    >>> delta = delta_calculation.delta_from_epsilon_and_samples(2.0, positive)
     >>> overall_delta = delta_calculation.get_overall_delta(
     ...     1000, delta, support_bound=positive.support_bound)
     >>> bool(positive.support_bound < 1 and delta <= overall_delta <= 1)
@@ -201,9 +275,11 @@ def get_importance_sampled_privacy_loss(
     epsilon: The epsilon at which the hockey-stick divergence will be estimated.
       The returned ``support_bound`` also holds for any larger epsilon.
     alpha: The stretch factor, at least 1. If ``None``, the factor minimizing
-      the support bound, :func:`optimal_stretch`, is used. Raises if the
-      resulting support bound exceeds 1, i.e. if ``alpha`` is a worse choice
-      than plain Monte Carlo.
+      the support bound, :func:`optimal_stretch`, is used. If the support bound
+      of the stretch factor is not below 1/2 (always the case for ``alpha=1``),
+      importance sampling would not pay for its extra cost and plain Monte Carlo
+      is used instead, with no log weights and a support bound of 1; see
+      :func:`support_bound`.
     seed: The rng or seed to use for sampling.
     positive_sample: If ``True``, the evaluation distribution is the one in the
       dominating pair where the sensitive example is included, otherwise the one
@@ -212,17 +288,23 @@ def get_importance_sampled_privacy_loss(
       efficient to generate multiple samples in a single call.
 
   Returns:
-    An :class:`ImportanceSample` of ``num_samples`` samples.
+    ``num_samples`` importance-weighted
+    :class:`~.delta_calculation.PrivacyLossSamples`, with ``log_weights`` the
+    log of the evaluation density over the proposal density for each sample.
   """
-  kappa = compute_kappa(strategy, noise_multiplier, c_col)
-  if alpha is None:
-    alpha = optimal_stretch(epsilon, kappa)
-  log_bound = log_support_bound(alpha, epsilon, kappa)
-  if log_bound > 0:
-    raise ValueError(
-        f'alpha={alpha} gives a support bound of {np.exp(log_bound)} > 1, which'
-        ' is worse than plain Monte Carlo. Use optimal_stretch, or alpha=1.'
+  alpha, log_bound = _stretch_and_log_bound(
+      strategy, noise_multiplier, c_col, epsilon, alpha
+  )
+  if alpha == 1:
+    privacy_loss, _ = sample_generation.get_privacy_loss_sample(
+        strategy,
+        noise_multiplier,
+        c_col,
+        seed=seed,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
     )
+    return delta_calculation.PrivacyLossSamples(privacy_loss)
 
   mode_scale = alpha if positive_sample else 1.0 - alpha
   samples = sample_generation.generate_sample(
@@ -248,4 +330,6 @@ def get_importance_sampled_privacy_loss(
   else:
     privacy_loss = -positive_privacy_loss
     log_weights = -proposal_log_density_ratio
-  return ImportanceSample(privacy_loss, log_weights, float(np.exp(log_bound)))
+  return delta_calculation.PrivacyLossSamples(
+      privacy_loss, log_weights=log_weights, support_bound=np.exp(log_bound)
+  )

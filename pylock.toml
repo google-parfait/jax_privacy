@@ -657,7 +657,7 @@ wheels = [{ url = "https://files.pythonhosted.org/packages/0c/d5/c5db1ea3394c6e1
 [[packages]]
 name = "dp-accounting"
 version = "0.6.0"
-vcs = { type = "git", url = "https://github.com/google/differential-privacy.git", commit-id = "7d61fcf8f1dd37ac96d28b9203ce9c48f116c4d0", subdirectory = "python/dp_accounting" }
+vcs = { type = "git", url = "https://github.com/google/differential-privacy.git", commit-id = "63f5d45d3a34ea547f7e255071097ce34d7fd4db", subdirectory = "python/dp_accounting" }
 
 [[packages]]
 name = "einops"

@@ -104,7 +104,7 @@ Ponomareva, Natalia and Pravilov, Mikhail and Rush, Keith and Smith, Samuel L
 and Stanforth, Robert and Mishra, Chaitanya},
   title = {{JAX}-{P}rivacy: Algorithms for Privacy-Preserving Machine Learning in JAX},
   url = {http://github.com/google-parfait/jax_privacy},
-  version = {2.3.0.dev0},
+  version = {2.4.0},
   year = {2026},
 }
 ```

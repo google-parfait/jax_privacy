@@ -246,6 +246,7 @@ def amplified_bandmf_event(
     A DpEvent object.
   """
   _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
+  _validate.positive(num_bands=num_bands)
   rounds = math.ceil(iterations / num_bands)
   return dpsgd_event(
       noise_multiplier=noise_multiplier,
@@ -281,14 +282,16 @@ def truncated_amplified_bandmf_event(
       the expected batch size (before truncation) is actually ``dataset_size *
       sampling_prob / num_bands`` (i.e., a factor of ``num_bands`` smaller than
       DP-SGD).
-    largest_group_size: The number of examples in the largest group, usually
-      ``math.ceil(num_examples / num_bands)``.
+    largest_group_size: The number of examples in the largest partition group.
+      For EQUAL_SPLIT this is ``num_examples // num_bands`` (floor). Use
+      ``math.ceil(num_examples / num_bands)`` when groups may be uneven.
     truncated_batch_size: The maximum batch size.
 
   Returns:
     A DpEvent object.
   """
   _validate_poisson_args(noise_multiplier, iterations, sampling_prob)
+  _validate.positive(num_bands=num_bands)
   return truncated_dpsgd_event(
       noise_multiplier=noise_multiplier,
       sampling_prob=sampling_prob,

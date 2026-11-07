@@ -195,6 +195,24 @@ class AccountingTest(parameterized.TestCase):
           noise_multiplier=1.0, iterations=50, **kwargs
       )
 
+  @parameterized.parameters(0, -1)
+  def test_amplified_bandmf_event_rejects_non_positive_num_bands(
+      self, num_bands
+  ):
+    with self.assertRaisesRegex(ValueError, "num_bands"):
+      accounting.amplified_bandmf_event(
+          1.0, 128, num_bands=num_bands, sampling_prob=0.01
+      )
+    with self.assertRaisesRegex(ValueError, "num_bands"):
+      accounting.truncated_amplified_bandmf_event(
+          1.0,
+          128,
+          num_bands=num_bands,
+          sampling_prob=0.01,
+          largest_group_size=10,
+          truncated_batch_size=8,
+      )
+
 
 if __name__ == "__main__":
   absltest.main()

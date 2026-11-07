@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import itertools
+import typing
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -73,6 +74,14 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_bootstrap_params_empty_quantiles(self):
     with self.assertRaisesRegex(ValueError, 'quantiles cannot be empty'):
       auditing.BootstrapParams(quantiles=[])
+
+  @parameterized.named_parameters(
+      ('scalar', 0.5),
+      ('2d', [[0.25, 0.75]]),
+  )
+  def test_bootstrap_params_non_1d_quantiles(self, quantiles):
+    with self.assertRaisesRegex(ValueError, 'quantiles must be a 1-D sequence'):
+      auditing.BootstrapParams(quantiles=quantiles)
 
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
   def test_bootstrap_params_quantiles_out_of_range(self, quantiles):
@@ -620,7 +629,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     self.assertEqual(eps, 0)
 
   @parameterized.product(
-      quantiles=(0.025, 0.975, (0.025, 0.975), (0.025, 0.5, 0.975)),
+      quantiles=((0.025,), (0.975,), (0.025, 0.975), (0.025, 0.5, 0.975)),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
   )
   def test_bootstrap(self, quantiles, bootstrap_type):
@@ -643,7 +652,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         acceleration=(bootstrap_type == 'acceleration'),
         seed=0xBAD5EED,
     )
-    interval = auditor._bootstrap(mean_score, bootstrap_params)
+    interval = auditor.bootstrap(mean_score, bootstrap_params)
     all_scores = np.concatenate([in_canary_scores, out_canary_scores])
     mu_hat, sigma_hat = np.mean(all_scores), np.std(all_scores)
     expected_interval = auditing._norm.ppf(
@@ -653,29 +662,18 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     )
     np.testing.assert_allclose(interval, expected_interval, rtol=0.01)
 
-  def test_tpr_at_given_fpr_bootstrap_raises_non_scalar_fpr(self):
-    auditor = auditing.CanaryScoreAuditor(
-        in_canary_scores=[1, 2, 3], out_canary_scores=[0, 1, 2]
-    )
-    bootstrap_params = auditing.BootstrapParams()
-    fpr = [0.1, 0.2]
-    with self.assertRaisesRegex(
-        ValueError, 'fpr must be a scalar for bootstrap'
-    ):
-      auditor.tpr_at_given_fpr(fpr, bootstrap_params=bootstrap_params)
-
   @parameterized.product(
-      metric_and_args=(
-          ('epsilon_raw_counts', ()),
-          ('tpr_at_given_fpr', (0.1,)),
-          ('attack_auroc', ()),
+      metric_fn=(
+          lambda a: a.epsilon_raw_counts(),
+          lambda a: a.tpr_at_given_fpr(0.1),
+          auditing.CanaryScoreAuditor.attack_auroc,
+          auditing.CanaryScoreAuditor.max_accuracy,
       ),
       bootstrap_type=('quantile', 'bias_correction', 'acceleration'),
       mu=(0, 1, 10),
   )
-  def test_auditing_metric_bootstrap(self, metric_and_args, bootstrap_type, mu):
+  def test_bootstrap_auditing_metric(self, metric_fn, bootstrap_type, mu):
     # Test that bootstrapped metrics run and return basically reasonable values.
-    metric_fn_name, args = metric_and_args
     rng = np.random.default_rng(seed=0xBAD5EED)
     in_canary_scores = rng.normal(mu, size=356)
     out_canary_scores = rng.normal(size=432)
@@ -685,10 +683,12 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
         acceleration=(bootstrap_type == 'acceleration'),
         seed=0xBAD5EED,
     )
-    metric_fn = getattr(auditor, metric_fn_name)
-    value = metric_fn(*args)
-    interval = metric_fn(*args, bootstrap_params=bootstrap_params)
+    value = metric_fn(auditor)
+    interval = auditor.bootstrap(metric_fn, bootstrap_params)
+    self.assertIsInstance(interval, tuple)
     self.assertLen(interval, 2)
+    for bound in interval:
+      self.assertIsInstance(bound, float)
     self.assertBetween(value, *interval)
 
   @parameterized.named_parameters(
@@ -769,6 +769,39 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
     in_canary_scores = jnp.ones((3,))
     out_canary_scores = jnp.zeros((5,))
     auditing.CanaryScoreAuditor(in_canary_scores, out_canary_scores)
+
+  def test_num_canaries_property(self):
+    auditor = auditing.CanaryScoreAuditor(
+        [1.0, 2.0, 3.0], [-1.0, 0.0, 0.5, 1.5]
+    )
+    self.assertEqual(auditor.num_canaries, (3, 4))
+
+  def test_scalar_methods_return_python_float(self):
+    auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
+    self.assertIsInstance(auditor.epsilon_clopper_pearson(0.05, 0.01), float)
+    self.assertIsInstance(
+        auditor.epsilon_clopper_pearson(
+            0.05, 0.01, threshold_strategy=auditing.MultiSplit(seed=0)
+        ),
+        float,
+    )
+    self.assertIsInstance(auditor.epsilon_raw_counts(min_count=5), float)
+    self.assertIsInstance(auditor.tpr_at_given_fpr(0.1), float)
+    self.assertIsInstance(auditor.attack_auroc(), float)
+    self.assertIsInstance(auditor.max_accuracy(), float)
+    self.assertIsInstance(auditor.max_accuracy(significance=0.05), float)
+    self.assertIsInstance(auditor.epsilon_from_gdp(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run(0.05, 0.01), float)
+    self.assertIsInstance(auditor.epsilon_one_run_fdp(0.05, 0.01), float)
+
+  def test_tpr_at_given_fpr_overloaded_return_types(self):
+    auditor = auditing.CanaryScoreAuditor(np.arange(100) + 1.5, np.arange(100))
+    tpr_scalar = typing.assert_type(auditor.tpr_at_given_fpr(0.1), float)
+    tpr_arr = typing.assert_type(
+        auditor.tpr_at_given_fpr([0.1, 0.2]), np.ndarray
+    )
+    self.assertIsInstance(tpr_scalar, float)
+    self.assertIsInstance(tpr_arr, np.ndarray)
 
 
 if __name__ == '__main__':

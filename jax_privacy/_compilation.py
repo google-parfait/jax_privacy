@@ -30,6 +30,7 @@ import contextlib
 import copy
 import dataclasses
 import functools
+import math
 from typing import Any, TYPE_CHECKING, TypeAlias
 
 from absl import logging
@@ -85,9 +86,18 @@ def hoist_closed_over_constants():
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class PadToMultiple:
-  """Pads each batch to a multiple of ``multiple`` to bound recompilations."""
+  """Pads each batch to a multiple of ``multiple`` to bound recompilations.
 
-  multiple: int = 32
+  If ``multiple`` is ``None`` (the default), batches are padded to the maximum
+  batch size encountered across the run (rounded up to a multiple of
+  ``microbatch_size`` if set), so ``train_step`` is compiled once.
+
+  Note: Because the compiled batch size(s) depend on the sampled batches, the
+  compilation cache (as well as step timing and memory usage) can leak
+  information about the secret batch selection if exposed to an adversary.
+  """
+
+  multiple: int | None = None
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -142,10 +152,25 @@ def _dry_run_state(
   if _data_loading.is_map_dataset(dataset):
     n = len(dataset)
   else:
-    n = _validate.batch(dataset, padding_example)
+    n = _validate.batched(dataset, padding_example)
   state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
   key = jax.ShapeDtypeStruct.like(jax.random.key(seed))
   return rng, n, state, key
+
+
+def _max_padded_batch_size(
+    strategy: batch_selection.BatchSelectionStrategy,
+    num_examples: int,
+    rng: np.random.Generator | int | None = None,
+    microbatch_size: int | None = None,
+) -> int:
+  """Returns the max batch size rounded up to a multiple of microbatch_size."""
+  # Dry-run the batch iterator on a copy of rng so the caller's generator state
+  # is preserved, then round the max size up to a multiple of microbatch_size.
+  batches = strategy.batch_iterator(num_examples, rng=copy.deepcopy(rng))
+  max_batch = max(idx.size for idx in batches)
+  mb = microbatch_size or 1
+  return max(mb, math.ceil(max_batch / mb) * mb)
 
 
 def precompile(
@@ -185,10 +210,19 @@ def precompile(
   )
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
+  microbatch_size = trainer.performance_flags.microbatch_size
+  if strategy.multiple is None:
+    multiple = _max_padded_batch_size(batch_strategy, n, rng, microbatch_size)
+    strategy = PadToMultiple(multiple=multiple)
+    trainer = dataclasses.replace(trainer, compilation_strategy=strategy)
   futures: dict[int, PrecompiledFuture] = {}
   with hoist_closed_over_constants():
     for idx in batch_strategy.batch_iterator(n, rng=rng):
-      padded = batch_selection.pad_to_multiple_of(idx, strategy.multiple)
+      padded = batch_selection.pad_to_multiple_of(
+          idx,
+          strategy.multiple,
+          microbatch_size=microbatch_size,
+      )
       batch_size = padded.size
       if batch_size in futures:
         continue

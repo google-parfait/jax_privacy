@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jax_privacy"
-version = "2.3.0.dev0"
+version = "2.4.0"
 description = "Algorithms for Privacy-Preserving Machine Learning in JAX."
 authors = [
   { name="Google DeepMind", email="jax-privacy-dev@google.com" },

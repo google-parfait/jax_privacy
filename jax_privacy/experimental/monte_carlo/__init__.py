@@ -20,5 +20,8 @@
 
    delta_calculation
    importance_sampling
+   jax_privacy_loss_samples
+   jax_sample_generation
+   jax_scoring
    sample_generation
 """

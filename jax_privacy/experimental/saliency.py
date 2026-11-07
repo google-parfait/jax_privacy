@@ -133,7 +133,7 @@ def _pad_batch_for_microbatching(
     microbatch_size: int | None,
 ) -> tuple[optax.ArrayTree, jax.Array]:
   """Pads a non-empty batch and returns its padding indicator."""
-  batch_size = _validate.batch(dataset)
+  batch_size = _validate.batched(dataset)
   indices = np.arange(batch_size)
   if microbatch_size is not None:
     indices = batch_selection.pad_to_multiple_of(
@@ -270,8 +270,8 @@ def topk_vote_probe(
         'clipping_kwargs argnums and batch_argnums must be distinct integer '
         'positions 0 and 1 for the parameters and dataset.'
     )
-  _validate.tree_structure(params, candidate_mask=candidate_mask)
-  batch_size = _validate.batch(dataset)
+  _validate.same_tree_structure(params, candidate_mask=candidate_mask)
+  batch_size = _validate.batched(dataset)
   num_candidates = sum(bool(x) for x in jax.tree.leaves(candidate_mask))
   _validate.positive(num_candidates=num_candidates)
   _validate.in_range(

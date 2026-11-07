@@ -127,7 +127,9 @@ real example. Examples marked as padding are zeroed out after clipping
 but before summation, so they contribute exactly zero to the aggregated
 output. This preserves the formal DP sensitivity guarantee: the L2
 sensitivity remains the same regardless of how many padding examples are in
-the batch.
+the batch. Floating-point leaves of per-example auxiliary outputs (`aux`,
+`norms`, `values`, `grad_norms`) at padding positions are set to `NaN` so they
+can be aggregated (for example, via `jnp.nanmean`) without bias from padding.
 
 When `is_padding_example` is omitted (the default), all examples are
 treated as real.

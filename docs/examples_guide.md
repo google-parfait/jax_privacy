@@ -159,6 +159,33 @@ quality.
 These examples focus on a single building block and do not implement a full
 DP training loop.
 
+### `saliency_probe.py`
+
+Runs `jax_privacy.experimental.saliency.topk_vote_probe` on a tiny MLP
+with synthetic data. Prints the selected parameter leaves and noisy vote
+scores, constructs the full-batch probe's Gaussian event, and composes it with
+an illustrative Poisson-sampled DP-SGD training event using
+{func}`~jax_privacy.accounting.dpsgd_event`.
+
+Run from the repository root after installing the library:
+
+```bash
+python -m pip install -e .
+JAX_PLATFORMS=cpu python examples/saliency_probe.py
+```
+
+No model or dataset downloads are needed. Noise uses fresh private randomness,
+so scores and selected leaves can vary between runs. The fixed data seed and
+model initialization are public.
+
+**Accounting scope:** The probe uses the entire synthetic batch, with no
+sampling amplification. Under add/remove-one adjacency, the printed combined
+budget covers this probe followed by the stated DP-SGD plan on the same
+population: 20 steps, independent Poisson sampling with probability 0.125,
+and noise multiplier 2.0. Training is not executed; an actual fine-tune must
+match this plan and use independent noise. This illustrates API usage and
+accounting, not a comparison of fine-tuning quality.
+
 ### `data_loading.py`
 
 Demonstrates how to integrate

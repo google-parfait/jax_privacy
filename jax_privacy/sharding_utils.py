@@ -30,26 +30,22 @@ Pillutla et al. (2025) <https://arxiv.org/abs/2506.08201>`_.
 """
 
 import math
-from typing import Any, Callable, TypeAlias
+from typing import Any, TypeAlias, TypeVar
 
 import jax
+from jax_privacy import _validate
+from jax_privacy import optimizers
 import numpy as np
 import optax
 
 
 PyTree: TypeAlias = Any
 PartitionSpecPyTree: TypeAlias = Any
-
-
-def _check_explicit_mesh(mesh: jax.sharding.Mesh):
-  if not all(
-      axis_type == jax.sharding.AxisType.Explicit
-      for axis_type in mesh.axis_types
-  ):
-    raise RuntimeError(
-        'This function requires an explicit mesh. Please set the mesh using'
-        ' jax.set_mesh() with an explicit mesh.'
-    )
+TransformT = TypeVar(
+    'TransformT',
+    optax.GradientTransformation,
+    optimizers.AugmentedGradientTransformation,
+)
 
 
 def _ceiling_to_multiple(size: int, multiple: int) -> int:
@@ -232,109 +228,10 @@ def compute_early_stopping_order(
   return indices.reshape(-1, microbatch_size).T.flatten()
 
 
-def _check_jit():
-  if isinstance(jax.numpy.array(0), jax.core.Tracer):
-    raise RuntimeError('This function cannot be used within a jitted context.')
-
-
-def _parallel_sample(
-    rng: np.random.Generator,
-    shape: int | tuple[int, ...],
-    sharding: jax.sharding.NamedSharding | None,
-    sampler: Callable[..., np.ndarray] = np.random.Generator.standard_normal,
-    dtype: jax.typing.DTypeLike | None = None,
-) -> jax.Array:
-  """Helper function for parallel_sample_pytree that works on a single leaf."""
-
-  _check_jit()
-
-  if sharding is None:
-    return jax.numpy.asarray(sampler(rng, size=shape, dtype=dtype))
-
-  _check_explicit_mesh(sharding.mesh)
-
-  if isinstance(shape, int):
-    shape = (shape,)
-  num_devices = sharding.mesh.size
-  size = _ceiling_to_multiple(math.prod(shape), num_devices)
-  per_device_size = size // num_devices
-
-  full_sharding = jax.sharding.NamedSharding(
-      sharding.mesh, jax.sharding.PartitionSpec(sharding.mesh.axis_names)
-  )
-
-  # In multi-machine settings, all CPUs will run the same code in parallel.
-  # If the rng implementation is `pure` (only depends on the seed), then all
-  # machines have consistent states. If it is not (e.g., depends on system
-  # randomness), then rngs[i] might be different across machines. However, each
-  # rng is only used once since we are generating an array that is fully sharded
-  # across all devices in the mesh, so the lack of cross-machine consistency
-  # is not an issue.
-  rngs = rng.spawn(num_devices)
-
-  def local_fn(s):
-    i = s[0].start // (s[0].stop - s[0].start)
-    return sampler(rngs[i], size=per_device_size, dtype=dtype)
-
-  fully_sharded_result = jax.make_array_from_callback(
-      (size,), full_sharding, local_fn
-  )
-  # TODO: b/415360727 - Materialization of this array of zeros is suboptimal.
-  result = jax.numpy.zeros(shape, dtype=dtype, out_sharding=sharding)
-  return local_reshape_add(result, fully_sharded_result)
-
-
-def parallel_sample_pytree(
-    rng: np.random.Generator,
-    struct: optax.ArrayTree,
-    sampler: Callable[..., np.ndarray] = np.random.Generator.standard_normal,
-) -> optax.ArrayTree:
-  """Sample a pytree with numpy and convert it to a sharded JAX pytree.
-
-  This function is intended to bridge the gap between JAX programs and
-  external sources of randomness, e.g., generating on CPU with numpy. This
-  function is defined in terms of a np.random.Generator input, such as those
-  defined by the ``randomgen`` python library. This function parallelizes the
-  sampling across all devices defined by the mesh, then communicates the
-  samples between devices as necessary to produce the desired output sharding.
-
-  Args:
-    rng: The random number generator to use.
-    struct: A PyTree of jax.Array or jax.ShapeDtypeStruct objects, defining the
-      shape, sharding, and dtype of the output pytree.
-    sampler: The sampler to use. Must consume a Generator as the 0th argument,
-      have a ``size`` keyword argument, and return a pure numpy array, i.e.,
-      ``sampler(rng: np.random.Generator, size: int) -> np.ndarray``.
-
-  Returns:
-    A PyTree with the same structure as ``struct``, with the sampled values.
-  """
-  _check_jit()
-
-  treedef = jax.tree.structure(struct)
-  rngs = jax.tree.unflatten(treedef, rng.spawn(treedef.num_leaves))
-
-  def leaf_fn(leaf, rng):
-    return _parallel_sample(rng, leaf.shape, leaf.sharding, sampler, leaf.dtype)
-
-  return jax.tree.map(leaf_fn, struct, rngs)
-
-
-def _check_auto_mesh():
-  mesh = jax.sharding.get_abstract_mesh()
-  if mesh.empty or not all(
-      axis_type == jax.sharding.AxisType.Auto for axis_type in mesh.axis_types
-  ):
-    raise ValueError(
-        'with_sharding_specs requires an active AxisType.Auto mesh. Please set'
-        ' the mesh using jax.set_mesh() with an Auto mesh.'
-    )
-
-
 def with_sharding_specs(
-    transform: optax.GradientTransformation,
+    transform: TransformT,
     param_specs: PartitionSpecPyTree,
-) -> optax.GradientTransformation:
+) -> TransformT:
   """Binds parameter PartitionSpecs to a transformation for Auto-axes meshes.
 
   Requires an active ``AxisType.Auto`` mesh set via :func:`jax.set_mesh`.
@@ -370,7 +267,7 @@ def with_sharding_specs(
 
   @jax.jit
   def init_fn(params):
-    _check_auto_mesh()
+    _validate.explicit_mesh(status=False)
     return jax.sharding.explicit_axes(transform.init, in_sharding=(specs,))(
         params
     )
@@ -378,7 +275,7 @@ def with_sharding_specs(
   @jax.jit
   def update_fn(updates, state, params=None):
     del params
-    _check_auto_mesh()
+    _validate.explicit_mesh(status=False)
 
     def _update(updates):
       # Trace transform.init inside explicit_axes to read the Explicit state
@@ -390,4 +287,4 @@ def with_sharding_specs(
 
     return jax.sharding.explicit_axes(_update, in_sharding=(specs,))(updates)
 
-  return optax.GradientTransformation(init_fn, update_fn)
+  return transform._replace(init=init_fn, update=update_fn)

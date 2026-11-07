@@ -14,10 +14,11 @@
 
 from absl.testing import absltest
 from absl.testing import parameterized
+import jax
 from jax_privacy import _validate
 
 
-class InRangeTest(parameterized.TestCase):
+class ValidateTest(parameterized.TestCase):
 
   @parameterized.product(
       closed=['both', 'left', 'right', 'neither'], value=[0.0, 0.5, 1.0]
@@ -48,6 +49,28 @@ class InRangeTest(parameterized.TestCase):
   def test_validates_all_values(self):
     with self.assertRaisesRegex(ValueError, 'Expected y='):
       _validate.in_range(0, 1, x=0.5, y=1.5)
+
+  def test_jitted(self):
+    _validate.jitted(False)
+    with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):
+      _validate.jitted(True)
+    jax.jit(lambda: _validate.jitted(True))()
+    with self.assertRaisesRegex(RuntimeError, 'outside a jitted context'):
+      jax.jit(lambda: _validate.jitted(False))()
+
+  def test_explicit_mesh(self):
+    explicit = jax.sharding.AbstractMesh(
+        (1,), ('x',), axis_types=(jax.sharding.AxisType.Explicit,)
+    )
+    auto = jax.sharding.AbstractMesh(
+        (1,), ('x',), axis_types=(jax.sharding.AxisType.Auto,)
+    )
+    _validate.explicit_mesh(status=True, device_mesh=explicit)
+    _validate.explicit_mesh(status=False, device_mesh=auto)
+    with self.assertRaisesRegex(ValueError, 'AxisType.Explicit'):
+      _validate.explicit_mesh(status=True, device_mesh=auto)
+    with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
+      _validate.explicit_mesh(status=False, device_mesh=explicit)
 
 
 class PositiveTest(parameterized.TestCase):

@@ -64,6 +64,20 @@ The format is based on https://keepachangelog.com/en/1.1.0/
         preview workflows.
     -   **Sphinx intersphinx mappings**: Added cross-reference mappings for
         `jax` and `optax` for native cross-references in Sphinx documentation.
+-   **[`CanaryScoreAuditor.bootstrap`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.auditing.html)**:
+    Added a public method to compute bootstrapped quantiles of any scalar
+    auditing metric, e.g.
+    `auditor.bootstrap(CanaryScoreAuditor.attack_auroc, params)`, replacing the
+    per-method `bootstrap_params` keyword argument. The quantiles are returned
+    as a tuple of Python floats.
+
+### Removed
+
+-   **`bootstrap_params` keyword argument** of
+    `CanaryScoreAuditor.epsilon_raw_counts`, `tpr_at_given_fpr`, and
+    `attack_auroc`: Use `CanaryScoreAuditor.bootstrap` instead, e.g.
+    `auditor.bootstrap(lambda a: a.tpr_at_given_fpr(0.01), params)`. These
+    methods now always return a point estimate.
 
 ### Fixed
 

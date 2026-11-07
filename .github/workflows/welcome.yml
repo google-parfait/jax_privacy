@@ -15,8 +15,7 @@
 name: Welcome First-Time Contributors
 
 on:
-  # zizmor: ignore[dangerous-triggers] - Only posts welcome comment; does not checkout untrusted code.
-  pull_request_target:
+  pull_request:
     types: [opened]
 
 permissions:

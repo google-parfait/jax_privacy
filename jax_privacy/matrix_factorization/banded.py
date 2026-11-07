@@ -134,7 +134,7 @@ class ColumnNormalizedBanded:
       # *_like preserves shape, dtype, and (if possible) sharding.
       zero = jnp.zeros_like(abstract_value, dtype=dtype)
       buffers = jnp.broadcast_to(zero, (self.bands,) + zero.shape)
-      return jnp.array(0), buffers
+      return jnp.array(0, dtype=jnp.int32), buffers
 
     def next_fn(value, state):
       index, bufs = state

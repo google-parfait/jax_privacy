@@ -275,7 +275,7 @@ def main(argv: Sequence[str]) -> None:
     clipped_grad_sum, aux = grad_fn(
         model_params, batch_x, batch_y, is_padding_example=is_padding_example
     )
-    loss = aux.values.mean()
+    loss = jnp.nanmean(aux.values)
     noisy_grad, noise_state = noise_transform.update(
         clipped_grad_sum, noise_state
     )
