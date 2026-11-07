@@ -80,7 +80,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('2d', [[0.25, 0.75]]),
   )
   def test_bootstrap_params_non_1d_quantiles(self, quantiles):
-    with self.assertRaisesRegex(ValueError, 'quantiles must be a 1-D sequence'):
+    with self.assertRaisesRegex(
+        ValueError, 'Expected quantiles to have ndim=1'
+    ):
       auditing.BootstrapParams(quantiles=quantiles)
 
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
@@ -90,7 +92,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_confidence_interval_illegal_confidence(self):
     for confidence in [-1, 0, 1, 2]:
-      with self.assertRaisesRegex(ValueError, 'confidence must be in'):
+      with self.assertRaisesRegex(ValueError, 'Expected confidence='):
         auditing.BootstrapParams.confidence_interval(confidence=confidence)
 
   @parameterized.named_parameters(
@@ -760,9 +762,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   )
   def test_auditor_raises_wrong_dim_scores(self, scores):
     other_scores = [1, 2, 3]
-    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+    with self.assertRaisesRegex(ValueError, 'to have ndim=1'):
       auditing.CanaryScoreAuditor(scores, other_scores)
-    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+    with self.assertRaisesRegex(ValueError, 'to have ndim=1'):
       auditing.CanaryScoreAuditor(other_scores, scores)
 
   def test_auditor_accepts_jax_array(self):

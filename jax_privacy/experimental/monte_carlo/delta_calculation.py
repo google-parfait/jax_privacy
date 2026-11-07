@@ -59,9 +59,8 @@ class PrivacyLossSamples:
   support_bound: float = 1.0
 
   def __post_init__(self):
+    _validate.ndim(1, privacy_loss=self.privacy_loss)
     shape = np.shape(self.privacy_loss)
-    if len(shape) != 1:
-      raise ValueError('privacy_loss must be a 1D array.')
     for name in ['counts', 'log_weights']:
       value = getattr(self, name)
       if value is not None and np.shape(value) != shape:
@@ -252,11 +251,8 @@ def minimum_samples_per_verification(
   Returns:
     The number of samples for each verification.
   """
-  _validate.in_range(
-      0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
-  )
-  if target_delta <= base_delta:
-    raise ValueError('target_delta must be > base_delta.')
+  _validate.in_range(0, 1, closed='right', base_delta=base_delta)
+  _validate.in_range(base_delta, 1, closed='right', target_delta=target_delta)
   _validate_support_bound(support_bounds, target_delta)
   support_bounds = np.asarray(support_bounds, dtype=float)
   max_support_bound = np.max(support_bounds)
