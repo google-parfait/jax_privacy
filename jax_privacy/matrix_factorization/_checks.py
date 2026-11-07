@@ -14,6 +14,7 @@
 
 """Utilities for confirming various symbols are used correctly."""
 
+from jax_privacy import _validate
 import numpy as np
 
 # Disabling pylint invalid-name to allow mathematical notation including
@@ -36,8 +37,7 @@ def check_lower_triangular(
 
 
 def check_is_matrix(M: np.typing.ArrayLike, name: str = ''):
-  if np.ndim(M) != 2:
-    raise ValueError(f'Matrix {_pad(name)}has unexpected shape {np.shape(M)}')
+  _validate.ndim(2, **{name or 'matrix': M})
 
 
 def check_square(M: np.typing.ArrayLike, name: str = ''):
