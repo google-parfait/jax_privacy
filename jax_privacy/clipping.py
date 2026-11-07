@@ -175,22 +175,6 @@ class BoundedSensitivityCallable:
         raise ValueError(f'Unsupported {neighboring_relation=}')
 
 
-def _compute_pytree_l2_norm(
-    pytree: PyTree,
-    min_dtype: jnp.dtype = jnp.float32,
-) -> jax.Array:
-  """Computes the L2 norm of a PyTree in at least `min_dtype` precision."""
-
-  # Upcast per leaf to avoid float16 overflow/underflow without full-tree copy.
-  def _leaf_squared_norm(x: jax.Array) -> jax.Array:
-    compute_dtype = jnp.promote_types(x.dtype, min_dtype)
-    x_promoted = x.astype(compute_dtype)
-    return jnp.sum(x_promoted * x_promoted)
-
-  squared_norms = [_leaf_squared_norm(x) for x in jax.tree.leaves(pytree)]
-  return jnp.sqrt(sum(squared_norms))
-
-
 def clip_pytree(
     pytree: PyTree,
     clip_norm: float | PyTree,
@@ -282,7 +266,9 @@ def clip_pytree(
     raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
 
   clip_norm = jnp.maximum(clip_norm, 0.0)
-  l2_norm = _compute_pytree_l2_norm(pytree)
+  # Cast to float (float32, or float64 when x64 is enabled) to prevent
+  # low-precision overflow/underflow; XLA fuses the cast into the reduction.
+  l2_norm = optax.tree.norm(optax.tree.cast(pytree, float))
   scale = jnp.minimum(1.0, clip_norm / l2_norm)
   if rescale_to_unit_norm:
     scale = jax.lax.select(clip_norm > 0, scale / clip_norm, 1 / l2_norm)
@@ -461,6 +447,20 @@ def _num_real_microbatches(
   return jnp.argmax(is_real_batch + jnp.linspace(0, 1, is_real_batch.size))
 
 
+def _sum_accumulator(dtype: jax.typing.DTypeLike | None):
+  """Returns a SUM accumulator that accumulates into ``dtype``."""
+  # Per-example outputs are computed and clipped in their native dtype inside
+  # vmap to avoid materializing microbatch-sized float32 tensors; they are only
+  # upcast to dtype when reducing each microbatch and accumulating across them.
+  cast = functools.partial(optax.tree.cast, dtype=dtype)
+  return microbatching.Accumulator(
+      init=lambda v: optax.tree.zeros_like(v, dtype=dtype),
+      update=lambda c, v, _: optax.tree.add(c, cast(v)),
+      finalize=lambda x: x,
+      aggregate=lambda v: jax.tree.map(lambda x: jnp.sum(x, 0, dtype=dtype), v),
+  )
+
+
 def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
   """Squeezes the second axis if it is of size 1.
 
@@ -603,8 +603,8 @@ def clipped_fun(
     slack: Optional number of SlaClip slack coordinates. Must be a positive
       Python integer. When set, the returned value is a
       :class:`ClippedGradOutput` whose fields must be privatized together. Slack
-      coordinates have float32 dtype. Only scalar global clipping is currently
-      supported.
+      coordinates are computed in float32 (or cast to ``dtype`` if set). Only
+      scalar global clipping is currently supported.
 
   Returns:
     A :class:`~jax_privacy.clipping.BoundedSensitivityCallable`
@@ -661,7 +661,6 @@ def clipped_fun(
         # dtype is intentionally ignored here; the output is always int64.
         clipped, norm = clip_and_round_to_grid(value, l2_clip_norm, grid_scale)
       else:
-        value = optax.tree.cast(value, dtype)
         clipped, norm = clip_pytree(value, l2_clip_norm, rescale_to_unit_norm)
       if slack is not None:
         slack_vector = _slack_from_norm(
@@ -672,7 +671,7 @@ def clipped_fun(
       return clipped, aux, norm
 
     num_real_mb = _num_real_microbatches(is_padding_example, microbatch_size)
-    sum_ = microbatching.AccumulationType.SUM
+    sum_ = _sum_accumulator(None if grid_scale is not None else dtype)
     concat = microbatching.AccumulationType.CONCAT
     axes = [0 if i in batch_argnums else None for i in range(len(args))]
     if prng_argnum is not None:
@@ -910,10 +909,15 @@ def clipped_grad(
     nan_safe: If ``True``, per-example gradients with non-finite L2 norms (NaN
       or inf) are zeroed out before aggregation, preserving the formal
       guarantees.
-    dtype: Optional dtype for the returned gradient. If ``None``, the dtype will
-      be the same as the dtypes of the gradient function. Can be useful to avoid
-      overflow issues when using low-precision dtypes as the returned function
-      computes a sum over a potentially large batch.
+    dtype: Optional accumulation and output dtype for the summed gradient.
+      Per-example gradients are computed and clipped in the dtype of the
+      differentiated ``argnums`` parameters (with L2 norms computed in float32,
+      or float64 when x64 is enabled) and cast to ``dtype`` only when summing
+      across the batch. To avoid materializing float32 per-example gradients
+      inside ``vmap``, pass low-precision (e.g. bfloat16) parameters to the
+      differentiated function and set ``dtype=jnp.float32`` rather than casting
+      float32 parameters to bfloat16 inside ``fun``. If ``None``, the output
+      retains the parameter dtypes.
     prng_argnum: If set, specifies which argument of ``fun`` is a PRNG key. The
       PRNG will be split to have a batch dimension and vmapped over.
     spmd_axis_name: See :func:`jax.vmap`. Only relevant in distributed settings.
@@ -965,7 +969,9 @@ def clipped_grad(
     value_and_aux, grad = value_and_grad_fn(*args, **kwargs)
     result = pre_clipping_transform(grad)
     grad_norms_val = jax.tree.map(
-        lambda _, g: optax.tree.norm(g), l2_clip_norm, grad
+        lambda _, g: optax.tree.norm(optax.tree.cast(g, float)),
+        l2_clip_norm,
+        grad,
     )
     if has_aux or return_values or return_grad_norms:
       aux = AuxiliaryOutput(

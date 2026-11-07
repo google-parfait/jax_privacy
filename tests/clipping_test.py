@@ -650,21 +650,36 @@ class ClipTransformTest(parameterized.TestCase):
 
   def test_nan_safe_float16_sum_of_squares_overflow_not_zeroed(self):
     """Large float16 gradients whose sum of squares > 65504 are not zeroed."""
-    # Gradient sum of squares = 100 * 10000 = 1,000,000 > 65504.
-    # Accumulating squared norms in float32 prevents the norm from overflowing
-    # to inf, ensuring nan_safe does not zero out valid finite gradients.
-    data = jnp.full((2, 100), 100.0, dtype=jnp.float16)
+    # Gradient sum of squares = 100 * 10000 = 1,000,000 > 65504, and batch sum
+    # across 800 examples is 80,000 > 65504 (overflows float16 unless
+    # accumulated in float32).
+    data = jnp.full((800, 100), 100.0, dtype=jnp.float16)
     cf = clipping.clipped_fun(
         lambda x: x,
         batch_argnums=0,
         keep_batch_dim=False,
         l2_clip_norm=2000.0,
+        dtype=jnp.float32,
+        microbatch_size=200,
         nan_safe=True,
     )
     result = cf(data)
+    self.assertEqual(result.dtype, jnp.float32)
     chex.assert_tree_all_finite(result)
-    expected = jnp.full((100,), 200.0, dtype=jnp.float16)
+    expected = jnp.full((100,), 80000.0, dtype=jnp.float32)
     chex.assert_trees_all_close(result, expected)
+
+    cg = clipping.clipped_grad(
+        lambda p, x: jnp.sum(p * x),
+        l2_clip_norm=2000.0,
+        batch_argnums=1,
+        return_grad_norms=True,
+        dtype=jnp.float32,
+    )
+    grads, aux = cg(jnp.zeros((100,), dtype=jnp.float16), data[:2])
+    self.assertEqual(grads.dtype, jnp.float32)
+    chex.assert_trees_all_close(grads, jnp.full((100,), 200.0))
+    chex.assert_trees_all_close(aux.grad_norms, jnp.array([1000.0, 1000.0]))
 
 
 class ClippedFunPerLayerTest(parameterized.TestCase):
