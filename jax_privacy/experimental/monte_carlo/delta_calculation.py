@@ -59,13 +59,11 @@ class PrivacyLossSamples:
   support_bound: float = 1.0
 
   def __post_init__(self):
-    shape = np.shape(self.privacy_loss)
-    if len(shape) != 1:
-      raise ValueError('privacy_loss must be a 1D array.')
-    for name in ['counts', 'log_weights']:
-      value = getattr(self, name)
-      if value is not None and np.shape(value) != shape:
-        raise ValueError(f'{name} must have the same shape as privacy_loss.')
+    _validate.ndim(1, privacy_loss=self.privacy_loss)
+    if self.counts is not None:
+      _validate.same_shape(self.privacy_loss, counts=self.counts)
+    if self.log_weights is not None:
+      _validate.same_shape(self.privacy_loss, log_weights=self.log_weights)
     if self.counts is not None and self.log_weights is not None:
       raise ValueError(
           'counts cannot be combined with log_weights: discretizing'
@@ -131,23 +129,6 @@ def _hoeffding_bound(
   return np.exp(-np.asarray(num_samples) * kl)
 
 
-def _validate_support_bound(support_bound: npt.ArrayLike, delta: float) -> None:
-  """Checks that every support_bound is in (delta, 1]."""
-  if np.max(support_bound) > 1:
-    raise ValueError(
-        'support_bound must be at most 1. If this came from importance'
-        ' sampling, the proposal is worse than plain Monte Carlo; use'
-        ' support_bound=1 and unweighted samples instead.'
-    )
-  if np.min(support_bound) <= delta:
-    raise ValueError('support_bound must be greater than delta.')
-
-
-def _validate_num_samples(num_samples: npt.ArrayLike) -> None:
-  if np.min(num_samples) <= 0:
-    raise ValueError(f'Expected num_samples={num_samples} > 0.')
-
-
 def get_overall_delta(
     num_samples: npt.ArrayLike,
     base_delta: float,
@@ -189,8 +170,8 @@ def get_overall_delta(
     overall_delta)-DP.
   """
   _validate.in_range(0, 1, closed='right', base_delta=base_delta)
-  _validate_num_samples(num_samples)
-  _validate_support_bound(support_bound, base_delta)
+  _validate.positive(num_samples=num_samples)
+  _validate.in_range(base_delta, 1, closed='right', support_bound=support_bound)
   max_support_bound = float(np.max(support_bound))
 
   def overall_delta_from_tau(tau):
@@ -252,12 +233,11 @@ def minimum_samples_per_verification(
   Returns:
     The number of samples for each verification.
   """
+  _validate.in_range(0, 1, closed='right', base_delta=base_delta)
+  _validate.in_range(base_delta, 1, closed='right', target_delta=target_delta)
   _validate.in_range(
-      0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
+      target_delta, 1, closed='right', support_bounds=support_bounds
   )
-  if target_delta <= base_delta:
-    raise ValueError('target_delta must be > base_delta.')
-  _validate_support_bound(support_bounds, target_delta)
   support_bounds = np.asarray(support_bounds, dtype=float)
   max_support_bound = np.max(support_bounds)
 
@@ -319,9 +299,11 @@ def get_base_delta(
     The base_delta such that we use Monte Carlo verification to check if each
     mechanism satisfies (epsilon, base_delta)-DP.
   """
-  _validate_num_samples(num_samples)
+  _validate.positive(num_samples=num_samples)
   _validate.in_range(0, 1, closed='right', target_delta=target_delta)
-  _validate_support_bound(support_bound, target_delta)
+  _validate.in_range(
+      target_delta, 1, closed='right', support_bound=support_bound
+  )
 
   def _excess_delta(base_delta):
     return (
@@ -480,8 +462,7 @@ def perform_calibration_from_samples(
     :math:`(\varepsilon, \text{base\_delta})`-DP (i.e., one that can be
     calibrated without Monte Carlo verification).
   """  # fmt: skip
-  if not positive_samples:
-    raise ValueError('positive_samples must be non-empty.')
+  _validate.non_empty(positive_samples=positive_samples)
   num_values = len(positive_samples)
   if negative_samples is None:
     negative_samples = [None] * num_values

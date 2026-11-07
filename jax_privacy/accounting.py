@@ -86,14 +86,10 @@ def _validate_fixed_args(
       dataset_size=dataset_size,
       batch_size=batch_size,
   )
-  if not replace and batch_size > dataset_size:
-    raise ValueError(
-        f'Expected {batch_size=} <= {dataset_size=} for replace=False.'
-    )
-  if replace and dataset_size == 0 and batch_size > 0:
-    raise ValueError(
-        f'Expected {batch_size=} == 0 for {dataset_size=} with replace=True.'
-    )
+  if not replace:
+    _validate.in_range(0, dataset_size, batch_size=batch_size)
+  elif dataset_size == 0:
+    _validate.equal(0, batch_size=batch_size)
 
 
 def dpsgd_event(
@@ -337,10 +333,8 @@ def random_allocation_dpsgd_event(
   _validate.non_negative(
       noise_multiplier=noise_multiplier,
       iterations=iterations,
-      total_participations=total_participations,
   )
-  if total_participations > iterations:
-    raise ValueError(f'Expected {total_participations=} <= {iterations=}.')
+  _validate.in_range(0, iterations, total_participations=total_participations)
   gaussian = dp_accounting.GaussianDpEvent(noise_multiplier)
   return dp_accounting.RandomAllocationDpEvent(
       event=gaussian,

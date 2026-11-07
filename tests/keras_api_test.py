@@ -76,7 +76,7 @@ class KerasApiTest(parameterized.TestCase):
     # Batch size must not exceed train size.
     with self.assertRaisesRegex(
         ValueError,
-        "Batch size 1001 must be less than or equal to train size 1000",
+        r"Expected batch_size=1001 in \[1, 1000\]",
     ):
       dataclasses.replace(valid_params, batch_size=1001)
 
@@ -116,7 +116,7 @@ class KerasApiTest(parameterized.TestCase):
 
     with self.assertRaisesRegex(
         ValueError,
-        "Microbatch size 11 must be less than or equal to batch size 10",
+        r"Expected microbatch_size=11 in \[1, 10\]",
     ):
       dataclasses.replace(valid_params, microbatch_size=11)
 

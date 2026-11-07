@@ -250,9 +250,7 @@ class ToeplitzTest(parameterized.TestCase):
   def test_multiply_checks(self):
     lhs_coef = jnp.array([1, 2, 3, 4])
     rhs_coef = jnp.array([5, 6])
-    with self.assertRaisesRegex(
-        ValueError, 'lhs_coef and rhs_coef must have the same length'
-    ):
+    with self.assertRaisesRegex(ValueError, 'Expected rhs_coef to have shape'):
       toeplitz.multiply(lhs_coef, rhs_coef, n=None)
 
   @hypothesis.given(n=st.integers(1, 32))
@@ -379,7 +377,7 @@ class ToeplitzTest(parameterized.TestCase):
     )
 
   def test_sensitivity_squared_bad_min_sep(self):
-    with self.assertRaisesRegex(ValueError, 'min_sep must be positive'):
+    with self.assertRaisesRegex(ValueError, 'Expected min_sep='):
       toeplitz.minsep_sensitivity_squared(strategy_coef=[1.0], min_sep=0, n=1)
 
   @parameterized.product(

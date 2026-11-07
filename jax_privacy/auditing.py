@@ -27,6 +27,7 @@ import functools
 from typing import Any, TypeAlias, overload
 
 import dp_accounting
+from jax_privacy import _validate
 import numpy as np
 import scipy.optimize
 import scipy.special
@@ -282,15 +283,9 @@ class BootstrapParams:
 
   def __post_init__(self):
     quantile_arr = np.asarray(self.quantiles)
-    if quantile_arr.ndim != 1:
-      raise ValueError(
-          'quantiles must be a 1-D sequence (e.g., (0.95,)), got'
-          f' {self.quantiles} with shape {quantile_arr.shape}.'
-      )
-    if quantile_arr.size == 0:
-      raise ValueError('quantiles cannot be empty.')
-    if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
-      raise ValueError(f'quantiles must be in (0, 1), got {self.quantiles}.')
+    _validate.ndim(1, quantiles=quantile_arr)
+    _validate.non_empty(quantiles=quantile_arr)
+    _validate.in_range(0, 1, closed='neither', quantiles=quantile_arr)
     if self.acceleration and not self.bias_correction:
       raise ValueError('Cannot use acceleration without bias correction.')
 
@@ -311,8 +306,7 @@ class BootstrapParams:
     Returns:
       A BootstrapParams object for computing a confidence interval.
     """
-    if not 0 < confidence < 1:
-      raise ValueError(f'confidence must be in (0, 1), got {confidence}.')
+    _validate.in_range(0, 1, closed='neither', confidence=confidence)
     significance = 1 - confidence
     quantiles = (significance / 2, 1 - significance / 2)
     return cls(num_samples=num_samples, quantiles=quantiles, seed=seed)
@@ -320,8 +314,7 @@ class BootstrapParams:
 
 def _log_sub(x, y):
   # Stable computation of log(exp(x) - exp(y)).
-  if np.any(y > x):
-    raise ValueError(f'y must be less than or equal to x, got y={y} and x={x}.')
+  _validate.in_range(-np.inf, x, y=y)
   with np.errstate(divide='ignore'):  # Okay to return -np.inf if x == y.
     return x + np.log1p(-np.exp(y - x))
 
@@ -445,9 +438,7 @@ def _tpr_at_given_fpr(
 ) -> np.ndarray:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
-
-  if not np.all((0 <= fpr) & (fpr <= 1)):
-    raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
+  _validate.in_range(0, 1, fpr=fpr)
 
   n_pos = tp_counts[-1]
   n_neg = fp_counts[-1]
@@ -510,8 +501,7 @@ def _random_partition(
     p: float,
 ) -> tuple[np.ndarray, np.ndarray]:
   """Randomly splits a score array into two parts."""
-  if not 0 < p < 1:
-    raise ValueError(f'p must be in (0, 1), got {p}.')
+  _validate.in_range(0, 1, closed='neither', p=p)
 
   perm = rng.permutation(len(scores))
   split_idx = int(len(scores) * p)
@@ -566,20 +556,15 @@ class CanaryScoreAuditor:
     """
     self._in_canary_scores = np.asarray(in_canary_scores)
     self._out_canary_scores = np.asarray(out_canary_scores)
-    if self._in_canary_scores.size == 0:
-      raise ValueError('in_canary_scores must be non-empty.')
-    if self._in_canary_scores.ndim != 1:
-      raise ValueError(
-          'in_canary_scores must be 1-dimensional, got'
-          f' {self._in_canary_scores.ndim}.'
-      )
-    if self._out_canary_scores.size == 0:
-      raise ValueError('out_canary_scores must be non-empty.')
-    if self._out_canary_scores.ndim != 1:
-      raise ValueError(
-          'out_canary_scores must be 1-dimensional, got'
-          f' {self._out_canary_scores.ndim}.'
-      )
+    _validate.non_empty(
+        in_canary_scores=self._in_canary_scores,
+        out_canary_scores=self._out_canary_scores,
+    )
+    _validate.ndim(
+        1,
+        in_canary_scores=self._in_canary_scores,
+        out_canary_scores=self._out_canary_scores,
+    )
 
     self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
         self._in_canary_scores, self._out_canary_scores
@@ -755,10 +740,8 @@ class CanaryScoreAuditor:
     Returns:
       Optimal epsilon lower bound.
     """
-    if not 0 < significance < 0.5:
-      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
-    if not 0 <= delta <= 1:
-      raise ValueError(f'delta must be in [0, 1], got {delta}.')
+    _validate.in_range(0, 0.5, closed='neither', significance=significance)
+    _validate.in_range(0, 1, delta=delta)
 
     return self._audit_with_threshold_strategy(
         threshold_strategy,
@@ -789,10 +772,8 @@ class CanaryScoreAuditor:
     Returns:
       Epsilon estimate ln(TPR/FPR).
     """
-    if min_count < 1:
-      raise ValueError(f'min_count must be positive, got {min_count}.')
-    if not 0 <= delta <= 1:
-      raise ValueError(f'delta must be in [0, 1], got {delta}.')
+    _validate.positive(min_count=min_count)
+    _validate.in_range(0, 1, delta=delta)
 
     eps = _epsilon_raw_counts_helper(
         self._get_tp_counts(), self._get_fp_counts(), min_count, delta
@@ -830,8 +811,7 @@ class CanaryScoreAuditor:
       allowing classifiers that randomize between two thresholds.
     """
     fpr = np.asarray(fpr)
-    if not np.all((0 <= fpr) & (fpr <= 1)):
-      raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
+    _validate.in_range(0, 1, fpr=fpr)
 
     tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
     return float(tpr) if fpr.ndim == 0 else tpr
@@ -905,12 +885,9 @@ class CanaryScoreAuditor:
     Returns:
         The estimated epsilon.
     """
-    if not 0 < significance < 0.5:
-      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
-    if eps_tol <= 0:
-      raise ValueError(f'eps_tol must be positive, got {eps_tol}.')
+    _validate.in_range(0, 0.5, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
+    _validate.positive(eps_tol=eps_tol)
 
     n_pos = self._fn_counts[-1]
     n_neg = self._tn_counts[-1]
@@ -1039,10 +1016,8 @@ class CanaryScoreAuditor:
     Returns:
       The estimated epsilon lower bound.
     """
-    if not 0 < significance < 1.0:
-      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    _validate.in_range(0, 1.0, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
     if not one_sided:
       raise ValueError('one_sided must be True.')
 
@@ -1081,10 +1056,8 @@ class CanaryScoreAuditor:
     Returns:
       The estimated epsilon lower bound.
     """
-    if not 0 < significance < 1.0:
-      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    _validate.in_range(0, 1.0, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
     if not one_sided:
       raise ValueError('one_sided must be True.')
 

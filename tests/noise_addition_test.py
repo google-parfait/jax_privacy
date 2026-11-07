@@ -92,7 +92,9 @@ _PRIVATIZER_FNS = (
 class PrivatizerTest(chex.TestCase, parameterized.TestCase):
 
   def test_mf_privatizer_raises_non_matrix_arg(self):
-    with self.assertRaisesRegex(ValueError, 'Expected 2D'):
+    with self.assertRaisesRegex(
+        ValueError, 'Expected noising_matrix to have ndim=2'
+    ):
       noise_addition.matrix_factorization_privatizer(
           jnp.ones(10),
           prng_key=jax.random.key(10),
