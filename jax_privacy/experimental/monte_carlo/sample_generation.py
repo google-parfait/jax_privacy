@@ -46,8 +46,7 @@ SupportedStrategies = (
 
 def _validate_c_col(c_col: np.ndarray) -> None:
   """Validates c_col for DP-BandMF."""
-  if c_col.ndim != 1:
-    raise ValueError('c_col must be a 1D array.')
+  _validate.ndim(1, c_col=c_col)
   if np.any(c_col < 0):
     raise ValueError('c_col must be non-negative.')
 
@@ -293,8 +292,7 @@ def _sample_cyclic_poisson_modes(
   _validate.positive(iterations=iterations)
   _validate.positive(cycle_length=cycle_length)
   _validate.in_range(0.0, 1.0, sampling_prob=sampling_prob)
-  if c_col.size > cycle_length:
-    raise ValueError('c_col must have length <= cycle_length.')
+  _validate.in_range(0, cycle_length, c_col_size=c_col.size)
   mode = np.zeros((iterations, num_samples))
   if positive_sample and c_col.size > 0:
     shifts = rng.integers(cycle_length, size=num_samples)
@@ -487,8 +485,7 @@ def _sample_b_min_sep_modes(
     the pre-truncation batch sizes excluding the sensitive example, otherwise
     ``None``.
   """
-  if c_col.size > strategy.min_sep:
-    raise ValueError('c_col must have length less than or equal to min_sep.')
+  _validate.in_range(0, strategy.min_sep, c_col_size=c_col.size)
   if c_col.size > strategy.iterations:
     c_col = c_col[: strategy.iterations]
   if strategy.truncated_batch_size:
@@ -567,11 +564,11 @@ def generate_sample(
   rng = np.random.default_rng(seed)
   aux = None
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
-    if dataset_size is not None:
-      raise ValueError(
-          'Monte Carlo accounting for balls-in-bins sampling does not support '
-          'truncation (yet), so dataset_size should not be set.'
-      )
+    _validate.is_none(
+        'Monte Carlo accounting for balls-in-bins sampling does not support '
+        'truncation (yet), so dataset_size should not be set.',
+        dataset_size=dataset_size,
+    )
     mode = _sample_balls_in_bins_modes(
         iterations=strategy.iterations,
         cycle_length=strategy.cycle_length,
@@ -599,11 +596,11 @@ def generate_sample(
         dataset_size=dataset_size,
     )
   elif isinstance(strategy, batch_selection.CyclicPoissonSampling):
-    if dataset_size is not None:
-      raise ValueError(
-          'Monte Carlo accounting for cyclic Poisson sampling does not support '
-          'truncation (yet), so dataset_size should not be set.'
-      )
+    _validate.is_none(
+        'Monte Carlo accounting for cyclic Poisson sampling does not support '
+        'truncation (yet), so dataset_size should not be set.',
+        dataset_size=dataset_size,
+    )
     if strategy.partition_type != batch_selection.PartitionType.INDEPENDENT:
       raise ValueError(
           'Monte Carlo accounting for cyclic Poisson sampling does not support '
@@ -650,7 +647,7 @@ def _compute_balls_in_bins_privacy_loss(
   """
   _validate.positive(epoch_length=epoch_length)
   _validate.positive(sigma=sigma)
-  _validate.equal(expected=2, sample_dimension=sample.ndim)
+  _validate.ndim(2, sample=sample)
   iterations = sample.shape[0]
   _validate_c_col(c_col)
   if c_col.size > iterations:
@@ -694,13 +691,10 @@ def _compute_cyclic_poisson_privacy_loss(
   _validate.positive(cycle_length=cycle_length)
   _validate.positive(sigma=sigma)
   _validate.in_range(0, 1, sampling_prob=sampling_prob)
-  _validate.equal(expected=2, sample_dimension=sample.ndim)
+  _validate.ndim(2, sample=sample)
   iterations = sample.shape[0]
   _validate_c_col(c_col)
-  if c_col.size > cycle_length:
-    raise ValueError(
-        'c_col must have length less than or equal to cycle_length.'
-    )
+  _validate.in_range(0, cycle_length, c_col_size=c_col.size)
   dot_products, squared_mode_norms = _sliding_dot_products_and_squared_norms(
       sample, c_col
   )
@@ -956,19 +950,13 @@ def compute_privacy_loss(
     The privacy loss of the sample, assuming we sample from the distribution in
     the dominating pair where the sensitive example is included.
   """
-  if sample.shape[0] != strategy.iterations:
-    raise ValueError(
-        "sample's size should be (iterations, num_samples), i.e. the first "
-        'dimension must match the number of iterations of the strategy. Got '
-        f'{sample.shape[0]} and {strategy.iterations}.'
-    )
+  _validate.equal(strategy.iterations, sample_iterations=sample.shape[0])
   if mode_scale != 1.0 and not isinstance(
       strategy, batch_selection.BallsInBinsSampling
   ):
     raise ValueError('mode_scale is only supported for balls-in-bins sampling.')
   if isinstance(strategy, batch_selection.BallsInBinsSampling):
-    if aux is not None:
-      raise ValueError('aux must be None for balls-in-bins sampling.')
+    _validate.is_none('aux must be None for balls-in-bins sampling.', aux=aux)
     return _compute_balls_in_bins_privacy_loss(
         epoch_length=strategy.cycle_length,
         sample=sample,
@@ -982,8 +970,8 @@ def compute_privacy_loss(
           'aux for b-min-sep sampling must be set if and only if '
           'strategy.truncated_batch_size is not None.'
       )
-    if aux is not None and aux.shape != sample.shape:
-      raise ValueError('aux must have the same shape as sample.')
+    if aux is not None:
+      _validate.same_shape(sample, aux=aux)
     return _compute_b_min_sep_privacy_loss(
         strategy=strategy,
         samples=sample,
@@ -992,8 +980,7 @@ def compute_privacy_loss(
         rest_batch_sizes=aux,
     )
   elif isinstance(strategy, batch_selection.CyclicPoissonSampling):
-    if aux is not None:
-      raise ValueError('aux must be None for cyclic Poisson sampling.')
+    _validate.is_none('aux must be None for cyclic Poisson sampling.', aux=aux)
     if strategy.partition_type != batch_selection.PartitionType.INDEPENDENT:
       raise ValueError(
           'Only INDEPENDENT partition type is supported for cyclic '

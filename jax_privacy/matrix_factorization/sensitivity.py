@@ -18,6 +18,7 @@ import functools
 
 import jax
 import jax.numpy as jnp
+from jax_privacy import _validate
 import numpy as np
 import numpy.typing  # pylint: disable=unused-import  # Makes np.typing available
 
@@ -124,18 +125,14 @@ def max_participation_for_linear_fn(
 
 def banded_lower_triangular_mask(n: int, num_bands: int) -> jnp.ndarray:
   """Returns n x n lower-triangular {0, 1} matrix with b bands of 1s."""
-  b = num_bands
-  if b < 1:
-    raise ValueError(f'num_bands must be >= 0, found {num_bands}')
-  return (np.tri(n) - np.tri(n, k=-b)).astype(np.int32)
+  _validate.positive(num_bands=num_bands)
+  return (np.tri(n) - np.tri(n, k=-num_bands)).astype(np.int32)
 
 
 def banded_symmetric_mask(n: int, num_bands: int) -> jnp.ndarray:
   """Returns n x n symmetric {0, 1} matrix with 2b - 1 bands of 1s."""
-  b = num_bands
-  if b < 1:
-    raise ValueError(f'num_bands must be >= 0, found {num_bands}')
-  return (np.tri(n, k=b - 1) - np.tri(n, k=-b)).astype(np.int32)
+  _validate.positive(num_bands=num_bands)
+  return (np.tri(n, k=num_bands - 1) - np.tri(n, k=-num_bands)).astype(np.int32)
 
 
 def get_min_sep_sensitivity_upper_bound_for_X(
@@ -234,8 +231,7 @@ def get_sensitivity_banded_for_X(
   """
   checks.check(X=X)
   n = X.shape[0]
-  if min_sep < 1 or min_sep > n:
-    raise ValueError(f'min_sep must be in the range [1, {n}], found {min_sep}.')
+  _validate.in_range(1, n, min_sep=min_sep)
 
   # Check the condition under which this approach holds.
   expected_zeros_in_x = ~banded_symmetric_mask(n, min_sep).astype((jnp.bool_))
@@ -285,8 +281,7 @@ def fixed_epoch_sensitivity_for_X(X: jnp.ndarray, epochs: int) -> float:
   if not isinstance(X, jnp.ndarray):
     X = jnp.array(X)
   checks.check(X=X)
-  if epochs <= 0:
-    raise ValueError(f'epochs={epochs} must be positive.')
+  _validate.positive(epochs=epochs)
   if X.shape[0] % epochs != 0:
     raise ValueError(f'epochs={epochs} must divide n={X.shape[0]}.')
   rounds_per_epoch = X.shape[0] // epochs

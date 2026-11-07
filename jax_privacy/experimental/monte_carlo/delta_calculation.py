@@ -59,13 +59,11 @@ class PrivacyLossSamples:
   support_bound: float = 1.0
 
   def __post_init__(self):
-    shape = np.shape(self.privacy_loss)
-    if len(shape) != 1:
-      raise ValueError('privacy_loss must be a 1D array.')
-    for name in ['counts', 'log_weights']:
-      value = getattr(self, name)
-      if value is not None and np.shape(value) != shape:
-        raise ValueError(f'{name} must have the same shape as privacy_loss.')
+    _validate.ndim(1, privacy_loss=self.privacy_loss)
+    if self.counts is not None:
+      _validate.same_shape(self.privacy_loss, counts=self.counts)
+    if self.log_weights is not None:
+      _validate.same_shape(self.privacy_loss, log_weights=self.log_weights)
     if self.counts is not None and self.log_weights is not None:
       raise ValueError(
           'counts cannot be combined with log_weights: discretizing'
@@ -252,11 +250,8 @@ def minimum_samples_per_verification(
   Returns:
     The number of samples for each verification.
   """
-  _validate.in_range(
-      0, 1, closed='right', base_delta=base_delta, target_delta=target_delta
-  )
-  if target_delta <= base_delta:
-    raise ValueError('target_delta must be > base_delta.')
+  _validate.in_range(0, 1, closed='right', base_delta=base_delta)
+  _validate.in_range(base_delta, 1, closed='right', target_delta=target_delta)
   _validate_support_bound(support_bounds, target_delta)
   support_bounds = np.asarray(support_bounds, dtype=float)
   max_support_bound = np.max(support_bounds)
@@ -480,8 +475,7 @@ def perform_calibration_from_samples(
     :math:`(\varepsilon, \text{base\_delta})`-DP (i.e., one that can be
     calibrated without Monte Carlo verification).
   """  # fmt: skip
-  if not positive_samples:
-    raise ValueError('positive_samples must be non-empty.')
+  _validate.non_empty(positive_samples=positive_samples)
   num_values = len(positive_samples)
   if negative_samples is None:
     negative_samples = [None] * num_values

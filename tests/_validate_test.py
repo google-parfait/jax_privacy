@@ -50,6 +50,30 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y='):
       _validate.in_range(0, 1, x=0.5, y=1.5)
 
+  def test_ndim(self):
+    _validate.ndim(1, x=[1, 2, 3], y=jax.numpy.zeros(4))
+    _validate.ndim(2, m=jax.numpy.eye(3))
+    with self.assertRaisesRegex(ValueError, 'Expected x to have ndim=1, got 0'):
+      _validate.ndim(1, x=3.0)
+    with self.assertRaisesRegex(ValueError, 'Expected y to have ndim=1, got 2'):
+      _validate.ndim(1, x=[1, 2], y=[[1, 2]])
+
+  def test_non_empty(self):
+    _validate.non_empty(x=[1], y=(1, 2), z=jax.numpy.zeros(3))
+    with self.assertRaisesRegex(ValueError, 'Expected x to be non-empty'):
+      _validate.non_empty(x=[])
+    with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
+      _validate.non_empty(x=[1], y=jax.numpy.zeros((0, 2)))
+
+  def test_same_shape(self):
+    _validate.same_shape(
+        jax.numpy.zeros((2, 3)), x=jax.numpy.ones((2, 3)), y=[[1, 2, 3]] * 2
+    )
+    with self.assertRaisesRegex(
+        ValueError, r'Expected x to have shape \(2, 3\), got \(2, 2\)'
+    ):
+      _validate.same_shape(jax.numpy.zeros((2, 3)), x=jax.numpy.zeros((2, 2)))
+
   def test_jitted(self):
     _validate.jitted(False)
     with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):
