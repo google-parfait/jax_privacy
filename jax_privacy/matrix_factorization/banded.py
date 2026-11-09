@@ -206,18 +206,30 @@ def minsep_sensitivity_squared(
   return max_participations
 
 
+def _checkpoint_count(n: int, bands: int, memory_limit_gb: float = 4) -> int:
+  """Largest power-of-two checkpoint count that fits in ``memory_limit_gb``.
+
+  Extra checkpoints beyond ``n`` cannot reduce rematerialization, and
+  ``log2(0)`` overflows when the working set exceeds the memory budget.
+  """
+  used = max(int(bands) * int(n), 1)
+  limit = int((2**30) * memory_limit_gb // 8)
+  if used >= limit:
+    return 1
+  max_pow = int(np.log2(limit // used) - 1)
+  checkpoints = 2 ** max(max_pow, 0)
+  return min(max(checkpoints, 1), int(n))
+
+
 def _equinox_scan_fn(n: int, bands: int, memory_limit_gb: float = 4):
   """Checkpointed scan function for memory-efficient backpropagation."""
   # We do not want to take a hard dependence on equinox, so we import it here.
   import equinox  # pylint: disable=g-import-not-at-top, import-outside-toplevel
 
-  used = bands * n
-  limit = 2**30 * memory_limit_gb // 8
-  checkpoints = 2 ** int(np.log2(limit // used) - 1)
   return functools.partial(
       equinox.internal.scan,
       kind='checkpointed',
-      checkpoints=checkpoints,
+      checkpoints=_checkpoint_count(n, bands, memory_limit_gb),
   )
 
 
@@ -226,10 +238,8 @@ def _dinosaur_scan_fn(n: int, bands: int, memory_limit_gb: float = 4):
   # We do not want to take a hard dependence on dinosaur, so we import it here.
   from dinosaur import time_integration  # pylint: disable=g-import-not-at-top, import-outside-toplevel
 
-  used = bands * n
-  limit = 2**30 * memory_limit_gb // 8
-  max_checkpoints = 2 ** int(np.log2(limit // used) - 1)
-  candidates = range(min(max_checkpoints, n), 0, -1)
+  max_checkpoints = _checkpoint_count(n, bands, memory_limit_gb)
+  candidates = range(max_checkpoints, 0, -1)
   num_checkpoints = next(filter(lambda d: n % d == 0, candidates))
   nested_lengths = [num_checkpoints, n // num_checkpoints]
   return functools.partial(
