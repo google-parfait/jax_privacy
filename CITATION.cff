@@ -56,6 +56,6 @@ authors:
 - family-names: "Stanforth"
   given-names: "Robert"
 title: "JAX-Privacy"
-version: 1.1.0
-date-released: 2025-04-21
+version: 2.4.0
+date-released: 2026-11-06
 url: "https://github.com/google-parfait/jax_privacy"
