@@ -741,23 +741,30 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
 
     self.assertEqual(int(state.step), 2)
 
-  def test_bfloat16_params_preserved(self):
-    """bfloat16 params with float32 aggregation should return bfloat16."""
-    params = jnp.array([5.0, 5.0], dtype=jnp.bfloat16)
+  @parameterized.parameters(jnp.bfloat16, jnp.float16)
+  def test_low_precision_params_master_weights(self, param_dtype):
+    """Low-precision params run loss_fn in param_dtype with float32 updates."""
+    params = jnp.array([5.0, 5.0], dtype=param_dtype)
     dataset = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     flags = execution_plan.PerformanceFlags(dtype=np.float32)
-    config = _make_config(iterations=2, noise_multiplier=0.0)
-    optimizer = optax.sgd(0.01)
+    config = _make_config(iterations=20, noise_multiplier=0.0)
+    optimizer = optax.sgd(0.001)
+
+    def loss_fn(p, batch, prng):
+      self.assertEqual(p.dtype, param_dtype)
+      return _quadratic_loss(p, batch, prng)
 
     trainer = training.DPTrainer(
         config=config,
         performance_flags=flags,
-        loss_fn=_quadratic_loss,
+        loss_fn=loss_fn,
         optimizer=optimizer,
     )
     state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
 
-    self.assertEqual(state.params.dtype, jnp.bfloat16)
+    self.assertEqual(state.params.dtype, jnp.float32)
+    self.assertEqual(state.param_dtypes, jnp.dtype(param_dtype))
+    self.assertTrue(jnp.all(state.params.astype(param_dtype) < params))
 
 
 class DPTrainerInitTest(parameterized.TestCase):
@@ -981,7 +988,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
       )
 
     self.assertEqual(int(state.step), 5)
-    self.assertEqual(state.params.dtype, param_dtype)
+    self.assertEqual(state.params.dtype, jnp.float32)
+    self.assertEqual(state.param_dtypes, jnp.dtype(param_dtype))
     # AOT precompilation should be effective (no JIT cache misses).
     for log in logs.output:
       self.assertNotIn('Cache Miss', log)
