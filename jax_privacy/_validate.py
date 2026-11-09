@@ -35,9 +35,10 @@ def non_negative(**kwargs):
 
 
 def positive(**kwargs):
-  """Validates that all values are positive."""
+  """Validates that all values are positive and finite."""
   for name, value in kwargs.items():
-    if value <= 0:
+    # A single negated check also rejects NaN, for which `value <= 0` is False.
+    if not (np.isfinite(value) and value > 0):
       raise ValueError(f'Expected {name}={value} > 0.')
 
 
