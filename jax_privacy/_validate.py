@@ -14,7 +14,6 @@
 
 """Centralized validation utilities for jax_privacy."""
 
-import copy
 import zlib
 
 import jax
@@ -149,16 +148,13 @@ def batched(pytree, padding_example=None) -> int:
   return sizes.pop()
 
 
-def multihost(first_example, rng):
-  """Validates that the dataset and RNG match across all JAX processes."""
+def equal_across_hosts(**kwargs):
+  """Validates that all provided array PyTrees match across JAX processes."""
   if jax.process_count() > 1:
-    to_bytes = lambda x: getattr(x, 'tobytes', lambda: str(x).encode())()
-    crcs = [
-        zlib.crc32(to_bytes(x)) % 2**31 for x in jax.tree.leaves(first_example)
-    ]
-    seed = copy.deepcopy(np.random.default_rng(rng)).integers(2**31)
+    crc = lambda x: zlib.crc32(np.asarray(x).tobytes()) % 2**31
+    hashes = jax.tree.map(crc, kwargs)
     multihost_utils.assert_equal(
-        (seed, *crcs), 'dataset and rng must match across all JAX processes'
+        hashes, f'{list(kwargs)} must match across all JAX processes'
     )
 
 
