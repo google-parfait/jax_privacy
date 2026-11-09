@@ -81,6 +81,13 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **BLT optimizer accuracy tests in CI**: The Mathias-bound
+    `test_optimize_single_participation_near_optimal` table is now fully
+    parameterized (Hypothesis `max_examples=10` previously skipped 7 of 17
+    rows, including two `rtol=1.05` cases), and the golden / near-optimal
+    optimizer tests run in GitHub Actions. The rest of
+    `buffered_toeplitz_test.py` remains ignored due to timeouts.
+
 -   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
