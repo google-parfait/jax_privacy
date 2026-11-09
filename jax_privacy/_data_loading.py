@@ -57,7 +57,7 @@ def _from_pytree(
 ) -> Iterator[BatchAndPadding]:
   """Yields padded (batch, is_padding_example) pairs from an array PyTree."""
   del max_workers
-  num_examples = _validate.batch(dataset, padding_example)
+  num_examples = _validate.batched(dataset, padding_example)
   _validate.multihost(jax.tree.map(lambda x: x[0], dataset), rng)
   index_iterator = strategy.batch_iterator(num_examples, rng=rng)
 

@@ -695,36 +695,38 @@ class OptimizationTest(parameterized.TestCase):
     assert_allclose(blt.output_scale, [0.0122853238, 0.1878393665], rtol=1e-5)
     assert_allclose(blt.buf_decay, [0.9999528892, 0.9857068667], rtol=1e-5)
 
-  @hypothesis.given(
-      n_nbuf_rtol_tuple=st.sampled_from([
-          # fmt: off
-          # pylint:disable=bad-whitespace
-          # We spot check a range of n and nbuf (both above and below the
-          # number of buffers that should be optimal).
-          # (n, nbuf, rtol)
-          (         10, 1, 1.04),
-          (        100, 2, 1.03),
-          (        100, 3, 1.03),
-          (      1_000, 2, 1.04),
-          (      1_000, 3, 1.03),
-          (     10_000, 1, 1.45),  # Too few buffers.
-          (     10_000, 3, 1.03),
-          (     10_000, 4, 1.03),
-          (    100_000, 2, 1.16),  # Too few buffers.
-          (    100_000, 4, 1.03),
-          (  1_000_000, 5, 1.05),
-          ( 10_000_000, 2, 1.40),  # Too few buffers.
-          ( 10_000_000, 4, 1.05),
-          ( 10_000_000, 6, 1.06),
-          ( 10_000_000, 8, 1.10),
-          (100_000_000, 2, 1.60),  # Too few buffers.
-          (100_000_000, 7, 1.05),
-          # fmt: on
-          # pylint:enable=bad-whitespace
-      ])
+  # Hypothesis sampled_from + max_examples=10 only executed 10 of these 17
+  # rows under the default profile, skipping two of the three rtol=1.05
+  # cases. Parameterize so every (n, nbuf) pair always runs.
+  # pylint:disable=bad-whitespace
+  # fmt: off
+  @parameterized.named_parameters(
+      # Spot-check a range of n and nbuf (both above and below the number of
+      # buffers that should be optimal).
+      # (name, n, nbuf, rtol)
+      ('n10_nbuf1',               10, 1, 1.04),
+      ('n100_nbuf2',             100, 2, 1.03),
+      ('n100_nbuf3',             100, 3, 1.03),
+      ('n1e3_nbuf2',           1_000, 2, 1.04),
+      ('n1e3_nbuf3',           1_000, 3, 1.03),
+      ('n1e4_nbuf1_few',      10_000, 1, 1.45),  # Too few buffers.
+      ('n1e4_nbuf3',          10_000, 3, 1.03),
+      ('n1e4_nbuf4',          10_000, 4, 1.03),
+      ('n1e5_nbuf2_few',     100_000, 2, 1.16),  # Too few buffers.
+      ('n1e5_nbuf4',         100_000, 4, 1.03),
+      ('n1e6_nbuf5',       1_000_000, 5, 1.05),
+      ('n1e7_nbuf2_few',  10_000_000, 2, 1.40),  # Too few buffers.
+      ('n1e7_nbuf4',      10_000_000, 4, 1.05),
+      ('n1e7_nbuf6',      10_000_000, 6, 1.06),
+      ('n1e7_nbuf8',      10_000_000, 8, 1.10),
+      ('n1e8_nbuf2_few', 100_000_000, 2, 1.60),  # Too few buffers.
+      ('n1e8_nbuf7',     100_000_000, 7, 1.05),
   )
-  def test_optimize_single_participation_near_optimal(self, n_nbuf_rtol_tuple):
-    n, num_buffers, rtol = n_nbuf_rtol_tuple
+  # fmt: on
+  # pylint:enable=bad-whitespace
+  def test_optimize_single_participation_near_optimal(
+      self, n, num_buffers, rtol
+  ):
     blt = buffered_toeplitz.optimize(
         error='max',
         min_buffers=num_buffers,

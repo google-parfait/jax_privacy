@@ -212,6 +212,10 @@ jobs:
           HYPOTHESIS_PROFILE: dpftrl_default
         run: |
           pytest -n auto tests/ -k "matrix_factorization or keras_api_e2e_test" --ignore=tests/matrix_factorization/buffered_toeplitz_test.py
+          # The rest of buffered_toeplitz_test.py is ignored (timeouts), but
+          # the closed-form optimizer accuracy tests are fast and were the
+          # only coverage of the Mathias-bound rtol table.
+          pytest tests/matrix_factorization/buffered_toeplitz_test.py -k "test_optimize_single_participation"
         shell: bash
 
 

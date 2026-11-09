@@ -18,7 +18,7 @@ import jax
 from jax_privacy import _validate
 
 
-class InRangeTest(parameterized.TestCase):
+class ValidateTest(parameterized.TestCase):
 
   @parameterized.product(
       closed=['both', 'left', 'right', 'neither'], value=[0.0, 0.5, 1.0]
