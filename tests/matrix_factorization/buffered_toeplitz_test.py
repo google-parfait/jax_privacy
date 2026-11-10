@@ -178,7 +178,8 @@ class BufferedToeplitzTest(parameterized.TestCase):
 
   def test_validate_param_lengths_match(self):
     with self.assertRaisesRegex(
-        ValueError, 'buf_decay and output_scale must have the same length'
+        ValueError,
+        r'Expected all of \(buf_decay, output_scale\) to have the same shape',
     ):
       buffered_toeplitz.BufferedToeplitz.build(
           buf_decay=[0.9, 0.8], output_scale=[0.1]
@@ -297,7 +298,7 @@ class BufferedToeplitzTest(parameterized.TestCase):
 
   @parameterized.parameters(-1, 0)
   def test_from_rational_approx_to_sqrt_x_projection_raises(self, nbuf: int):
-    with self.assertRaisesRegex(ValueError, 'num_buffers must be >= 1'):
+    with self.assertRaisesRegex(ValueError, 'Expected num_buffers='):
       buffered_toeplitz.BufferedToeplitz.from_rational_approx_to_sqrt_x(
           num_buffers=nbuf
       )

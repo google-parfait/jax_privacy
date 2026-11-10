@@ -29,6 +29,8 @@ import jax
 import numpy as np
 import optax
 
+from .. import _validate
+
 
 def _get_sampling_parameters(sigma: float, size: int) -> tuple[float, int]:
   """Computes the sampling parameters for the discrete Gaussian sampler.
@@ -93,17 +95,14 @@ def sample_discrete_gaussian(
   """
   if not np.issubdtype(dtype, np.integer):
     raise ValueError(f"dtype must be an integer type, got {dtype}.")
-  if size <= 0:
-    raise ValueError("size must be positive.")
-  if sigma < 0:
-    raise ValueError("sigma must be positive.")
-  elif sigma == 0:  # degenerate case, return 0
+  _validate.positive(size=size)
+  _validate.non_negative(sigma=sigma)
+  if sigma == 0:  # degenerate case, return 0
     return np.zeros(size, dtype=dtype)
   if oversample is None:
     laplace_scale, oversample = _get_sampling_parameters(sigma, size)
-  elif oversample <= 0:
-    raise ValueError("oversample must be positive.")
   else:
+    _validate.positive(oversample=oversample)
     laplace_scale, _ = _get_sampling_parameters(sigma, size)
   p = -np.expm1(-1 / laplace_scale)
   ans = np.zeros(size, dtype=np.int64)

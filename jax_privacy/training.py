@@ -133,6 +133,7 @@ class TrainingState:
   params: Params
   opt_state: OptState
   noise_state: NoiseState
+  param_dtypes: Any = jax.tree.static(default=None)
 
 
 CallbackFn: TypeAlias = Callable[[int, TrainingState, PerExampleAux], None]
@@ -150,6 +151,14 @@ class DPTrainer:
   *per-run state* (data, initial params, RNG seed).  This makes the
   ``train_step`` method available as a standalone callable that can be
   compiled or used independently of the training loop.
+
+  **Mixed precision**: :meth:`init` upcasts ``params`` (along with optimizer
+  and noise state) to ``performance_flags.dtype`` (``float32`` by default) so
+  small updates do not underflow low-precision weights such as ``bfloat16``.
+  During :meth:`train_step`, ``state.params`` is cast back to the original
+  parameter dtypes outside ``loss_fn`` so the forward/backward pass and
+  per-example gradients run in low precision, while ``state.params`` remains in
+  ``performance_flags.dtype`` throughout and after :meth:`fit`.
 
   **Sharding**: For multi-device training inside a :func:`jax.set_mesh`
   context, provide ``params`` sharded on the active mesh and configure
@@ -216,15 +225,15 @@ class DPTrainer:
     optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
     if (specs := self.performance_flags.param_specs) is not None:
       optimizer = sharding_utils.with_sharding_specs(optimizer, specs)
-    # jax_privacy will sometimes upcast gradients to a higher dtype for
-    # numerical stability, regardless of the dtype of params.
-    grads_like = optax.tree.cast(params, self.performance_flags.dtype)
-    noise_state = self.plan.noise_addition_transform.init(grads_like)
+    param_dtypes = jax.tree.map(jax.numpy.dtype, params)
+    master_params = optax.tree.cast(params, self.performance_flags.dtype)
+    noise_state = self.plan.noise_addition_transform.init(master_params)
     return TrainingState(
         step=jax.numpy.zeros((), dtype=jax.numpy.int32),
-        params=params,
-        opt_state=optimizer.init(grads_like),
+        params=master_params,
+        opt_state=optimizer.init(master_params),
         noise_state=noise_state,
+        param_dtypes=param_dtypes,
     )
 
   @jax.jit(static_argnames=["self"], donate_argnames=["state"])
@@ -263,8 +272,13 @@ class DPTrainer:
         prng_argnum=2,
     )
     loss_prng = jax.random.fold_in(prng_key, state.step)
+    params = state.params
+    if state.param_dtypes is not None:
+      # Cast master params to original dtypes outside grad_fn so per-example
+      # gradients stay in low precision while state.params uses master dtype.
+      params = jax.tree.map(jax.numpy.astype, params, state.param_dtypes)
     clipped_grad_sum, aux = grad_fn(
-        state.params, batch, loss_prng, is_padding_example=is_padding_example
+        params, batch, loss_prng, is_padding_example=is_padding_example
     )
     dp_grad, new_noise_state = self.plan.noise_addition_transform.update(
         clipped_grad_sum, state.noise_state
@@ -279,6 +293,7 @@ class DPTrainer:
         params=new_params,
         opt_state=new_opt_state,
         noise_state=new_noise_state,
+        param_dtypes=state.param_dtypes,
     )
     return new_state, aux
 

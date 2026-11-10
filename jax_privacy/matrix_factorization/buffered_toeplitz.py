@@ -29,6 +29,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from .. import _validate
 from . import optimization
 from . import sensitivity
 from . import streaming_matrix
@@ -196,12 +197,9 @@ class BufferedToeplitz:
           f'buf_decay.shape = {self.buf_decay.shape} and '
           f'output_scale.shape = {self.output_scale.shape}'
       )
-    if self.buf_decay.shape != self.output_scale.shape:
-      raise ValueError(
-          'buf_decay and output_scale must have the same length, but '
-          f'buf_decay.shape = {self.buf_decay.shape} !='
-          f' output_scale.shape = {self.output_scale.shape}'
-      )
+    _validate.same_shape(
+        buf_decay=self.buf_decay, output_scale=self.output_scale
+    )
     if self.buf_decay.dtype != self.output_scale.dtype:
       raise ValueError(
           'buf_decay and output_scale must have the same dtype, but '
@@ -306,8 +304,7 @@ class BufferedToeplitz:
     # Note: Following Prop 4.5, we actually construct a BLT for
     # C^{-1} based on the rational function approximation of sqrt(1 - x),
     # and then take the inverse.
-    if num_buffers < 1:
-      raise ValueError('num_buffers must be >= 1.')
+    _validate.positive(num_buffers=num_buffers)
 
     degree = num_buffers
     d1 = (degree + 1) // 2

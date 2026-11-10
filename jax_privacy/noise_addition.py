@@ -53,6 +53,7 @@ from jax import numpy as jnp
 import numpy as np
 import optax
 
+from . import _validate
 from . import sharding_utils
 from .matrix_factorization import streaming_matrix
 
@@ -238,9 +239,7 @@ def _dense_matrix_factorization_privatizer(
   """Creates a gradient privatizer from a dense matrix C^{-1}."""
   # See Section 4.4.5 of https://arxiv.org/pdf/2506.08201 (Approach 2)
   noising_matrix = jnp.asarray(noising_matrix)
-
-  if noising_matrix.ndim != 2:
-    raise ValueError(f'Expected 2D matrix, found {noising_matrix.shape=}.')
+  _validate.ndim(2, noising_matrix=noising_matrix)
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
