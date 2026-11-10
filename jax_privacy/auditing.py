@@ -32,6 +32,8 @@ import scipy.optimize
 import scipy.special
 import scipy.stats
 
+from . import _validate
+
 
 _norm = scipy.stats.norm
 _binom = scipy.stats.binom
@@ -311,8 +313,7 @@ class BootstrapParams:
     Returns:
       A BootstrapParams object for computing a confidence interval.
     """
-    if not 0 < confidence < 1:
-      raise ValueError(f'confidence must be in (0, 1), got {confidence}.')
+    _validate.in_range(0, 1, closed='neither', confidence=confidence)
     significance = 1 - confidence
     quantiles = (significance / 2, 1 - significance / 2)
     return cls(num_samples=num_samples, quantiles=quantiles, seed=seed)
@@ -510,8 +511,7 @@ def _random_partition(
     p: float,
 ) -> tuple[np.ndarray, np.ndarray]:
   """Randomly splits a score array into two parts."""
-  if not 0 < p < 1:
-    raise ValueError(f'p must be in (0, 1), got {p}.')
+  _validate.in_range(0, 1, closed='neither', p=p)
 
   perm = rng.permutation(len(scores))
   split_idx = int(len(scores) * p)
@@ -755,10 +755,8 @@ class CanaryScoreAuditor:
     Returns:
       Optimal epsilon lower bound.
     """
-    if not 0 < significance < 0.5:
-      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
-    if not 0 <= delta <= 1:
-      raise ValueError(f'delta must be in [0, 1], got {delta}.')
+    _validate.in_range(0, 0.5, closed='neither', significance=significance)
+    _validate.in_range(0, 1, delta=delta)
 
     return self._audit_with_threshold_strategy(
         threshold_strategy,
@@ -789,10 +787,8 @@ class CanaryScoreAuditor:
     Returns:
       Epsilon estimate ln(TPR/FPR).
     """
-    if min_count < 1:
-      raise ValueError(f'min_count must be positive, got {min_count}.')
-    if not 0 <= delta <= 1:
-      raise ValueError(f'delta must be in [0, 1], got {delta}.')
+    _validate.positive(min_count=min_count)
+    _validate.in_range(0, 1, delta=delta)
 
     eps = _epsilon_raw_counts_helper(
         self._get_tp_counts(), self._get_fp_counts(), min_count, delta
@@ -905,12 +901,9 @@ class CanaryScoreAuditor:
     Returns:
         The estimated epsilon.
     """
-    if not 0 < significance < 0.5:
-      raise ValueError(f'significance must be in (0, 0.5), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
-    if eps_tol <= 0:
-      raise ValueError(f'eps_tol must be positive, got {eps_tol}.')
+    _validate.in_range(0, 0.5, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
+    _validate.positive(eps_tol=eps_tol)
 
     n_pos = self._fn_counts[-1]
     n_neg = self._tn_counts[-1]
@@ -1039,10 +1032,8 @@ class CanaryScoreAuditor:
     Returns:
       The estimated epsilon lower bound.
     """
-    if not 0 < significance < 1.0:
-      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    _validate.in_range(0, 1.0, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
     if not one_sided:
       raise ValueError('one_sided must be True.')
 
@@ -1081,10 +1072,8 @@ class CanaryScoreAuditor:
     Returns:
       The estimated epsilon lower bound.
     """
-    if not 0 < significance < 1.0:
-      raise ValueError(f'significance must be in (0, 1.0), got {significance}.')
-    if not 0 < delta <= 1:
-      raise ValueError(f'delta must be in (0, 1], got {delta}.')
+    _validate.in_range(0, 1.0, closed='neither', significance=significance)
+    _validate.in_range(0, 1, closed='right', delta=delta)
     if not one_sided:
       raise ValueError('one_sided must be True.')
 

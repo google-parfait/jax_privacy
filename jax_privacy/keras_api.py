@@ -214,22 +214,16 @@ class DPKerasConfig:
         batch_size=self.batch_size,
         train_size=self.train_size,
     )
-    if self.batch_size > self.train_size:
-      raise ValueError(
-          f'Batch size {self.batch_size} must be less than or equal to train'
-          f' size {self.train_size}.'
-      )
+    _validate.in_range(1, self.train_size, batch_size=self.batch_size)
     _validate.positive(
         train_steps=self.train_steps,
         gradient_accumulation_steps=self.gradient_accumulation_steps,
     )
     if self.microbatch_size is not None:
       _validate.positive(microbatch_size=self.microbatch_size)
-      if self.microbatch_size > self.batch_size:
-        raise ValueError(
-            f'Microbatch size {self.microbatch_size} must be less than or'
-            f' equal to batch size {self.batch_size}.'
-        )
+      _validate.in_range(
+          1, self.batch_size, microbatch_size=self.microbatch_size
+      )
     if self.noise_multiplier is not None:
       _validate.positive(noise_multiplier=self.noise_multiplier)
       try:
@@ -508,37 +502,14 @@ def _pad_batch_indices(indices: np.ndarray, multiple: int) -> np.ndarray:
 
 def _tree_batch_size(tree: optax.ArrayTree) -> int:
   """Returns and validates the batch size of a pytree of arrays."""
-  leaves = jax.tree.leaves(tree)
-  # Expected input: a non-empty pytree of random-access arrays whose leaves all
-  # share the same leading batch dimension.
-  if not leaves:
-    raise ValueError('Expected at least one array leaf in the training data.')
-  batch_size = None
-  for leaf in leaves:
-    if not hasattr(leaf, 'shape'):
-      raise ValueError(
-          'DP Keras training requires random-access array-like inputs.'
-      )
-    if not leaf.shape:
-      raise ValueError(
-          'DP Keras training requires each input leaf to have a batch'
-          ' dimension.'
-      )
+  for leaf in jax.tree.leaves(tree):
     try:
       np.asarray(leaf[:1])
     except Exception as exc:  # pylint: disable=broad-exception-caught
       raise ValueError(
           'DP Keras training requires random-access array-like inputs.'
       ) from exc
-    leaf_batch_size = leaf.shape[0]
-    if batch_size is None:
-      batch_size = leaf_batch_size
-    elif leaf_batch_size != batch_size:
-      raise ValueError(
-          'All training data leaves must agree on their leading batch'
-          ' dimension.'
-      )
-  return int(batch_size)
+  return _validate.batched(tree)
 
 
 def _take_batch_from_leaf(

@@ -25,10 +25,13 @@ import dataclasses
 import functools
 import math
 from typing import Any, Callable
+
 import dp_accounting
 import jax
 import jax.numpy as jnp
 import numpy as np
+
+from .. import _validate
 from . import optimization
 from . import sensitivity
 from . import streaming_matrix
@@ -349,9 +352,7 @@ def minsep_sensitivity_squared(
     non-negative and non-increasing, and an upper bound otherwise.
   """
   coef, n = _reconcile(strategy_coef, n)
-
-  if not min_sep > 0:
-    raise ValueError('min_sep must be positive')
+  _validate.positive(min_sep=min_sep)
 
   # Project onto non-negative non-increasing coefficients. This is a no-op
   # when the coefficients already satisfy these assumptions, and yields an
@@ -508,8 +509,7 @@ def optimize_banded_toeplitz(
 
   if strategy_coef is None:
     strategy_coef = optimal_max_error_strategy_coefs(bands)
-  if strategy_coef.shape[0] != bands:
-    raise ValueError(f'{strategy_coef.shape=} != {bands=}')
+  _validate.equal(bands, strategy_coef_len=strategy_coef.shape[0])
 
   params = optimization.optimize(
       loss_fn, strategy_coef, max_optimizer_steps=max_optimizer_steps

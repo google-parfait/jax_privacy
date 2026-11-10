@@ -29,6 +29,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 
+from .. import _validate
 from . import optimization
 from . import sensitivity
 from . import streaming_matrix
@@ -306,8 +307,7 @@ class BufferedToeplitz:
     # Note: Following Prop 4.5, we actually construct a BLT for
     # C^{-1} based on the rational function approximation of sqrt(1 - x),
     # and then take the inverse.
-    if num_buffers < 1:
-      raise ValueError('num_buffers must be >= 1.')
+    _validate.positive(num_buffers=num_buffers)
 
     degree = num_buffers
     d1 = (degree + 1) // 2

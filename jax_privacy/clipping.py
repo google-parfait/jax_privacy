@@ -57,8 +57,7 @@ def _validate_slack_config(
     return
   if isinstance(slack, bool) or not isinstance(slack, int):
     raise TypeError('slack must be a Python integer or None.')
-  if slack <= 0:
-    raise ValueError('slack must be positive.')
+  _validate.positive(slack=slack)
   if grid_scale is not None:
     raise ValueError('slack is not supported with discrete grid clipping.')
   # We may want to support one slack vector per leaf in the future.
@@ -262,8 +261,8 @@ def clip_pytree(
     return ClippedTreeAndNorm(clipped=clipped, norm=norms)
 
   # -- Global Norm --
-  if isinstance(clip_norm, numbers.Real) and clip_norm < 0:
-    raise ValueError(f'clip_norm must be non-negative, got {clip_norm=}.')
+  if isinstance(clip_norm, numbers.Real):
+    _validate.non_negative(clip_norm=clip_norm)
 
   clip_norm = jnp.maximum(clip_norm, 0.0)
   # Cast to float (float32, or float64 when x64 is enabled) to prevent
@@ -480,12 +479,9 @@ def _validate_is_padding_example(is_padding_example, batch_size: int):
         'is_padding_example must be a 1-D array, got'
         f' ndim={is_padding_example.ndim}.'
     )
-  if is_padding_example.shape[0] != batch_size:
-    raise ValueError(
-        f'is_padding_example has shape {is_padding_example.shape} but'
-        f' batch has size {batch_size}. The leading dimensions must'
-        ' match.'
-    )
+  _validate.equal(
+      batch_size, is_padding_example_len=is_padding_example.shape[0]
+  )
   if is_padding_example.dtype != jnp.bool_:
     raise ValueError(
         'is_padding_example must have dtype bool, got'
@@ -726,8 +722,7 @@ def clipped_fun(
 
 def _validate_static_args(argnums, batch_argnums, normalize_by):
   """Validates the argnums and batch_argnums inputs are compatible."""
-  if normalize_by <= 0.0:
-    raise ValueError(f'normalize_by must be > 0, got {normalize_by}.')
+  _validate.positive(normalize_by=normalize_by)
   if isinstance(argnums, int):
     argnums = (argnums,)
   if isinstance(batch_argnums, int):
