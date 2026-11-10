@@ -223,9 +223,9 @@ def reverse_divergence_bound(
   _validate_balls_in_bins(strategy)
   _validate.positive(noise_multiplier=noise_multiplier)
   modes = sample_generation.balls_in_bins_modes(strategy, c_col)
-  sensitivity = np.linalg.norm(modes.mean(axis=1))
+  sensitivity = np.linalg.norm(modes.sum(axis=1) / strategy.cycle_length)
   # Half the mean squared distance of the modes from their mean, in noise units.
-  shift = (np.mean(np.sum(modes**2, axis=0)) - sensitivity**2) / (
+  shift = (np.sum(modes**2) / strategy.cycle_length - sensitivity**2) / (
       2 * noise_multiplier**2
   )
   if epsilon <= shift:

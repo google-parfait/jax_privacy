@@ -202,6 +202,37 @@ class SampleGenerationTest(parameterized.TestCase):
     else:
       _assert_mode_frequencies(samples, [first_mode], np.array([1.0]))
 
+  def test_balls_in_bins_modes_compresses_duplicate_zero_modes(self):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=6, iterations=3
+    )
+    c_col = np.array([1.0, 0.5])
+    modes = sample_generation.balls_in_bins_modes(sampling_scheme, c_col)
+    expected_modes = np.array([
+        [1.0, 0.0, 0.0, 0.0],
+        [0.5, 1.0, 0.0, 0.0],
+        [0.0, 0.5, 1.0, 0.0],
+    ])
+    np.testing.assert_allclose(modes, expected_modes)
+
+  def test_generate_balls_in_bins_sample_cycle_above_iterations(self):
+    sampling_scheme = batch_selection.BallsInBinsSampling(
+        cycle_length=6, iterations=3
+    )
+    c_col = np.array([1.0, 0.5])
+    samples = sample_generation.generate_sample(
+        sampling_scheme,
+        noise_multiplier=1e-9,
+        c_col=c_col,
+        positive_sample=True,
+        num_samples=12000,
+        seed=0xBAD5EED,
+    )
+    modes = sample_generation.balls_in_bins_modes(sampling_scheme, c_col).T
+    _assert_mode_frequencies(
+        samples, modes, np.array([1 / 6, 1 / 6, 1 / 6, 3 / 6])
+    )
+
   @parameterized.parameters(2.0, -0.5)
   def test_generate_balls_in_bins_sample_low_noise_with_mode_scale(
       self, mode_scale
@@ -577,9 +608,13 @@ class SampleGenerationTest(parameterized.TestCase):
     privacy_loss = sample_generation.compute_privacy_loss(
         sampling_scheme, samples, noise_multiplier, c_col, mode_scale=mode_scale
     )
-    # Brute-force log P_w(y) / Q(y) by multiplying by the dense mode matrix.
-    modes = mode_scale * sample_generation.balls_in_bins_modes(
-        sampling_scheme, c_col
+    # Brute-force log P_w(y) / Q(y) by multiplying by the uncompressed dense
+    # mode matrix of shape (iterations, cycle_length).
+    first_mode = sample_generation._balls_in_bins_first_mode(
+        iterations, cycle_length, tuple(c_col[:iterations])
+    )
+    modes = mode_scale * scipy.linalg.toeplitz(
+        first_mode, np.zeros(cycle_length)
     )
     llrs = (2 * modes.T @ samples - (modes**2).sum(axis=0)[:, None]) / (
         2 * noise_multiplier**2

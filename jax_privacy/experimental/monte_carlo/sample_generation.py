@@ -184,15 +184,21 @@ def _all_balls_in_bins_modes(
     cycle_length: int,
     c_col_tuple: tuple[float, ...],
 ) -> np.ndarray:
-  """Computes and caches all modes induced by balls-in-bins."""
+  """Computes and caches all unique modes induced by balls-in-bins."""
   first_mode = _balls_in_bins_first_mode(iterations, cycle_length, c_col_tuple)
-  return sp.linalg.toeplitz(first_mode, np.zeros(cycle_length))
+  return sp.linalg.toeplitz(
+      first_mode, np.zeros(min(cycle_length, iterations + 1))
+  )
 
 
 def balls_in_bins_modes(
     strategy: batch_selection.BallsInBinsSampling, c_col: np.ndarray
 ) -> np.ndarray:
-  """Returns all modes of the mixture induced by balls-in-bins sampling.
+  """Returns the modes of the mixture induced by balls-in-bins sampling.
+
+  When ``strategy.cycle_length > strategy.iterations``, the
+  ``strategy.cycle_length - strategy.iterations`` duplicate zero modes are
+  compressed into a single trailing zero column.
 
   Args:
     strategy: The balls-in-bins sampling strategy.
@@ -200,9 +206,16 @@ def balls_in_bins_modes(
       and 1D.
 
   Returns:
-    An array of shape ``(strategy.iterations, strategy.cycle_length)`` whose
-    columns are the equally likely means of the positive distribution in the
-    dominating pair.
+    An array of shape ``(strategy.iterations, min(strategy.cycle_length,
+    strategy.iterations + 1))`` whose columns are the modes of the positive
+    distribution in the dominating pair.
+
+    - If ``strategy.cycle_length <= strategy.iterations``, the positive
+      distribution chooses a mode uniformly at random.
+    - If ``strategy.cycle_length > strategy.iterations``, the last mode is the
+      all-zeros vector. This mode is chosen with probability
+      ``(strategy.cycle_length - strategy.iterations) / strategy.cycle_length``
+      and the other modes each with probability ``1 / strategy.cycle_length``.
   """
   _validate_c_col(c_col)
   return _all_balls_in_bins_modes(
@@ -251,9 +264,12 @@ def _sample_balls_in_bins_modes(
   possible_modes = _all_balls_in_bins_modes(
       iterations, cycle_length, tuple(c_col)
   )
-  counts = rng.multinomial(
-      n=num_samples, pvals=np.full(cycle_length, 1.0 / cycle_length)
-  )
+  num_modes = possible_modes.shape[1]  # min(cycle_length, iterations + 1)
+  pvals = np.full(num_modes, 1.0 / cycle_length)
+  # No-op unless cycle_length > iterations, in which case we have a zero mode
+  # with probability (cycle_length - iterations) / cycle_length.
+  pvals[-1] += (cycle_length - num_modes) / cycle_length
+  counts = rng.multinomial(n=num_samples, pvals=pvals)
   return np.repeat(possible_modes, repeats=counts, axis=1)
 
 
@@ -656,12 +672,15 @@ def _compute_balls_in_bins_privacy_loss(
   # C.
   first_mode = _balls_in_bins_first_mode(iterations, epoch_length, tuple(c_col))
   dot_products, squared_mode_norms = _sliding_dot_products_and_squared_norms(
-      sample, first_mode, num_shifts=epoch_length
+      sample, first_mode, num_shifts=min(epoch_length, iterations)
   )
   llrs = _normal_llrs(
       dot_products, squared_mode_norms[:, np.newaxis], sigma, mode_scale
   )
-  return sp.special.logsumexp(llrs, axis=0) - np.log(epoch_length)
+  log_sum = sp.special.logsumexp(llrs, axis=0)
+  if epoch_length > iterations:
+    log_sum = np.logaddexp(log_sum, np.log(epoch_length - iterations))
+  return log_sum - np.log(epoch_length)
 
 
 def _compute_cyclic_poisson_privacy_loss(

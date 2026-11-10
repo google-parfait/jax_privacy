@@ -124,6 +124,16 @@ class KappaTest(absltest.TestCase):
         _KAPPA / 4,
     )
 
+  def test_cycle_length_above_iterations(self):
+    strategy = batch_selection.BallsInBinsSampling(
+        cycle_length=10, iterations=3
+    )
+    # Modes are [1, 0.5, 0], [0, 1, 0.5], [0, 0, 1], and compressed [0, 0, 0].
+    self.assertAlmostEqual(
+        importance_sampling.compute_kappa(strategy, _NOISE_MULTIPLIER, _C_COL),
+        1.25,
+    )
+
   def test_rejects_other_strategies(self):
     strategy = batch_selection.CyclicPoissonSampling(
         sampling_prob=0.5, iterations=4, cycle_length=2
@@ -173,6 +183,30 @@ class ReverseDivergenceBoundTest(parameterized.TestCase):
             _STRATEGY, _NOISE_MULTIPLIER, _C_COL, epsilon=0.2
         ),
         1.0,
+    )
+
+  def test_cycle_length_above_iterations_weights_zero_modes(self):
+    strategy = batch_selection.BallsInBinsSampling(cycle_length=6, iterations=3)
+    # Uncompressed modes have columns [1, 0.5, 0], [0, 1, 0.5], [0, 0, 1], and
+    # three [0, 0, 0] columns.
+    uncompressed_modes = np.array([
+        [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.5, 1.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.5, 1.0, 0.0, 0.0, 0.0],
+    ])
+    sensitivity = np.linalg.norm(uncompressed_modes.mean(axis=1))
+    shift = (
+        np.mean(np.sum(uncompressed_modes**2, axis=0)) - sensitivity**2
+    ) / (2 * _NOISE_MULTIPLIER**2)
+    epsilon = 1.0
+    expected = dp_accounting.get_delta_gaussian(
+        epsilon - shift, _NOISE_MULTIPLIER / sensitivity
+    )
+    self.assertAlmostEqual(
+        importance_sampling.reverse_divergence_bound(
+            strategy, _NOISE_MULTIPLIER, _C_COL, epsilon
+        ),
+        expected,
     )
 
   @parameterized.named_parameters(
@@ -350,6 +384,43 @@ class GetImportanceSampledPrivacyLossTest(parameterized.TestCase):
         delta_calculation.delta_from_epsilon_and_samples(epsilon, sample),
         weighted.mean(),
     )
+
+  @parameterized.named_parameters(("forward", True), ("reverse", False))
+  def test_is_unbiased_when_cycle_length_above_iterations(
+      self, positive_sample
+  ):
+    strategy = batch_selection.BallsInBinsSampling(cycle_length=6, iterations=3)
+    # In the reverse direction, privacy loss is bounded above by
+    # log(cycle_length / (cycle_length - iterations)) = log(2) ~= 0.693, so pick
+    # epsilon = 0.2 < log(2) and noise_multiplier = 2.0 (kappa = 0.3125) so
+    # importance sampling is active and both directions have positive mass.
+    noise_multiplier, epsilon, num_samples = 2.0, 0.2, 200_000
+    sample = importance_sampling.get_importance_sampled_privacy_loss(
+        strategy,
+        noise_multiplier,
+        _C_COL,
+        epsilon,
+        seed=0xC0FFEE,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+    )
+    plain_privacy_loss, _ = sample_generation.get_privacy_loss_sample(
+        strategy,
+        noise_multiplier,
+        _C_COL,
+        seed=0xC0FFEE,
+        positive_sample=positive_sample,
+        num_samples=num_samples,
+    )
+    self.assertLess(sample.support_bound, 0.5)
+    weighted = _hockey_stick_estimands(epsilon, sample.privacy_loss) * np.exp(
+        sample.log_weights
+    )
+    plain = _hockey_stick_estimands(epsilon, plain_privacy_loss)
+    self.assertGreater(plain.mean(), 1e-4)
+    standard_error = np.sqrt((plain.var() + weighted.var()) / num_samples)
+    self.assertLess(abs(plain.mean() - weighted.mean()), 6 * standard_error)
+    self.assertLess(weighted.var(), plain.var())
 
 
 if __name__ == "__main__":
