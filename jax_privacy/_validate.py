@@ -29,14 +29,14 @@ import numpy as np
 def non_negative(**kwargs):
   """Validates that all values are non-negative."""
   for name, value in kwargs.items():
-    if value < 0:
+    if np.any(np.asarray(value) < 0):
       raise ValueError(f'Expected {name}={value} >= 0.')
 
 
 def positive(**kwargs):
   """Validates that all values are positive."""
   for name, value in kwargs.items():
-    if value <= 0:
+    if np.any(np.asarray(value) <= 0):
       raise ValueError(f'Expected {name}={value} > 0.')
 
 
@@ -56,9 +56,10 @@ def in_range(lo, hi, closed='both', **kwargs):
   lo_closed = closed in ('both', 'left')
   hi_closed = closed in ('both', 'right')
   for name, value in kwargs.items():
-    lo_ok = lo <= value if lo_closed else lo < value
-    hi_ok = value <= hi if hi_closed else value < hi
-    if not (lo_ok and hi_ok):
+    arr = np.asarray(value)
+    lo_ok = (lo <= arr) if lo_closed else (lo < arr)
+    hi_ok = (arr <= hi) if hi_closed else (arr < hi)
+    if not np.all(lo_ok & hi_ok):
       interval = (
           f"{'[' if lo_closed else '('}{lo}, {hi}{']' if hi_closed else ')'}"
       )

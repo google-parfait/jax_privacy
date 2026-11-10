@@ -50,6 +50,17 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y='):
       _validate.in_range(0, 1, x=0.5, y=1.5)
 
+  def test_array_values(self):
+    _validate.non_negative(x=[0.0, 1.0], y=jax.numpy.zeros((2, 2)))
+    _validate.positive(x=[0.5, 1.0], y=jax.numpy.ones((2, 2)))
+    _validate.in_range(0, 1, closed='neither', x=[0.25, 0.75])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.non_negative(x=[0.0, -0.1])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.positive(x=[1.0, 0.0])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.in_range(0, 1, closed='neither', x=[0.5, 1.0])
+
   def test_ndim(self):
     _validate.ndim(1, x=[1, 2, 3], y=jax.numpy.zeros(4))
     _validate.ndim(2, m=jax.numpy.eye(3))

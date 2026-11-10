@@ -47,8 +47,7 @@ SupportedStrategies = (
 def _validate_c_col(c_col: np.ndarray) -> None:
   """Validates c_col for DP-BandMF."""
   _validate.ndim(1, c_col=c_col)
-  if np.any(c_col < 0):
-    raise ValueError('c_col must be non-negative.')
+  _validate.non_negative(c_col=c_col)
 
 
 def _banded_c_times_x(c_col: np.ndarray, x: np.ndarray) -> np.ndarray:

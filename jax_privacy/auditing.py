@@ -286,8 +286,7 @@ class BootstrapParams:
     quantile_arr = np.asarray(self.quantiles)
     _validate.ndim(1, quantiles=quantile_arr)
     _validate.non_empty(quantiles=quantile_arr)
-    if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
-      raise ValueError(f'quantiles must be in (0, 1), got {self.quantiles}.')
+    _validate.in_range(0, 1, closed='neither', quantiles=quantile_arr)
     if self.acceleration and not self.bias_correction:
       raise ValueError('Cannot use acceleration without bias correction.')
 
@@ -316,8 +315,7 @@ class BootstrapParams:
 
 def _log_sub(x, y):
   # Stable computation of log(exp(x) - exp(y)).
-  if np.any(y > x):
-    raise ValueError(f'y must be less than or equal to x, got y={y} and x={x}.')
+  _validate.in_range(-np.inf, x, y=y)
   with np.errstate(divide='ignore'):  # Okay to return -np.inf if x == y.
     return x + np.log1p(-np.exp(y - x))
 
@@ -442,9 +440,7 @@ def _tpr_at_given_fpr(
 ) -> np.ndarray:
   """Computes maximum TPR at a given FPR."""
   fpr = np.asarray(fpr)
-
-  if not np.all((0 <= fpr) & (fpr <= 1)):
-    raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
+  _validate.in_range(0, 1, fpr=fpr)
 
   n_pos = tp_counts[-1]
   n_neg = fp_counts[-1]
@@ -817,8 +813,7 @@ class CanaryScoreAuditor:
       allowing classifiers that randomize between two thresholds.
     """
     fpr = np.asarray(fpr)
-    if not np.all((0 <= fpr) & (fpr <= 1)):
-      raise ValueError(f'fpr must be in [0, 1], got {fpr}.')
+    _validate.in_range(0, 1, fpr=fpr)
 
     tpr = _tpr_at_given_fpr(fpr, self._get_tp_counts(), self._get_fp_counts())
     return float(tpr) if fpr.ndim == 0 else tpr

@@ -724,10 +724,7 @@ def _validate_static_args(argnums, batch_argnums, normalize_by):
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
   _validate.non_empty(batch_argnums=batch_argnums)
-  if min(argnums + batch_argnums) < 0:
-    raise ValueError(
-        f'argnums={argnums} and batch_argnums={batch_argnums} must be >= 0.'
-    )
+  _validate.non_negative(argnums=argnums, batch_argnums=batch_argnums)
   shared_argnums = set(argnums) & set(batch_argnums)
   if shared_argnums:
     raise ValueError(

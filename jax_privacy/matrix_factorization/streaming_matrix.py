@@ -24,6 +24,8 @@ import jax
 from jax import numpy as jnp
 import optax
 
+from .. import _validate
+
 State = TypeVar('State', bound=optax.ArrayTree)
 Shape: TypeAlias = tuple[int, ...]
 ShapePyTree = Any
@@ -295,11 +297,7 @@ def momentum_sgd_matrix(
 ) -> StreamingMatrix:
   """An implicit representation of the momentum sgd matrix."""
   lr_sched = jnp.ones(1) if learning_rates is None else learning_rates
-  if lr_sched.min() <= 0.0:
-    raise ValueError(
-        'Learning rates must be positive (zero learning rates may prevent '
-        f'matrix factorization from succeeding.) Found {learning_rates}'
-    )
+  _validate.positive(learning_rates=lr_sched)
 
   def init_multiply(abstract_value):
     dtype = jnp.promote_types(abstract_value.dtype, lr_sched.dtype)

@@ -89,7 +89,7 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
 
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
   def test_bootstrap_params_quantiles_out_of_range(self, quantiles):
-    with self.assertRaisesRegex(ValueError, 'quantiles must be in'):
+    with self.assertRaisesRegex(ValueError, 'Expected quantiles='):
       auditing.BootstrapParams(quantiles=quantiles)
 
   def test_bootstrap_params_confidence_interval_illegal_confidence(self):
