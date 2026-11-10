@@ -34,6 +34,8 @@ import jax.numpy as jnp
 import jax.scipy as jsp
 from jax_privacy import batch_selection
 
+from ... import _validate
+
 __all__ = ['compute_privacy_loss']
 
 # Unroll factor for the scoring recurrence (see _ksubset_log_mgf). Feeding
@@ -274,8 +276,7 @@ def compute_privacy_loss(
   """
   sample = jnp.asarray(sample)
   c_col = jnp.asarray(c_col, dtype=sample.dtype)
-  if sample.ndim != 1:
-    raise ValueError('sample must be 1D of shape (iterations,).')
+  _validate.ndim(1, sample=sample)
   if c_col.shape[0] > sample.shape[0]:
     c_col = c_col[: sample.shape[0]]
   llrs = _log_likelihood_ratios(c_col, sample, noise_multiplier)

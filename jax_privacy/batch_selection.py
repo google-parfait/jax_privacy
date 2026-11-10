@@ -239,8 +239,7 @@ def pad_to_multiple_of(
   Returns:
     The padded array of indices.
   """
-  if indices.ndim > 1:
-    raise ValueError('pad_to_multiple_of currently expects 1D indices.')
+  _validate.ndim(1, indices=indices)
   _validate.positive(multiple=multiple)
   if microbatch_size is not None and multiple % microbatch_size != 0:
     raise ValueError(f'{multiple=} must be divisible by {microbatch_size=}.')

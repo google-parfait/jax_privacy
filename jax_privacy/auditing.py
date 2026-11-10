@@ -284,11 +284,7 @@ class BootstrapParams:
 
   def __post_init__(self):
     quantile_arr = np.asarray(self.quantiles)
-    if quantile_arr.ndim != 1:
-      raise ValueError(
-          'quantiles must be a 1-D sequence (e.g., (0.95,)), got'
-          f' {self.quantiles} with shape {quantile_arr.shape}.'
-      )
+    _validate.ndim(1, quantiles=quantile_arr)
     if quantile_arr.size == 0:
       raise ValueError('quantiles cannot be empty.')
     if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
@@ -371,7 +367,8 @@ def _pareto_frontier(points: np.ndarray) -> np.ndarray:
     A numpy array of length M with 2 <= M <= N, containing the indices of the
     vertices on the pareto frontier.
   """
-  if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 2:
+  _validate.ndim(2, points=points)
+  if points.shape[0] < 2 or points.shape[1] != 2:
     raise ValueError(f'Expected at least two 2D points, got {points.shape}.')
 
   if not np.all(points[:-1, 0] <= points[1:, 0]):
@@ -568,18 +565,13 @@ class CanaryScoreAuditor:
     self._out_canary_scores = np.asarray(out_canary_scores)
     if self._in_canary_scores.size == 0:
       raise ValueError('in_canary_scores must be non-empty.')
-    if self._in_canary_scores.ndim != 1:
-      raise ValueError(
-          'in_canary_scores must be 1-dimensional, got'
-          f' {self._in_canary_scores.ndim}.'
-      )
     if self._out_canary_scores.size == 0:
       raise ValueError('out_canary_scores must be non-empty.')
-    if self._out_canary_scores.ndim != 1:
-      raise ValueError(
-          'out_canary_scores must be 1-dimensional, got'
-          f' {self._out_canary_scores.ndim}.'
-      )
+    _validate.ndim(
+        1,
+        in_canary_scores=self._in_canary_scores,
+        out_canary_scores=self._out_canary_scores,
+    )
 
     self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
         self._in_canary_scores, self._out_canary_scores

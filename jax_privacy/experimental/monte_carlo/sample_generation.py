@@ -46,8 +46,7 @@ SupportedStrategies = (
 
 def _validate_c_col(c_col: np.ndarray) -> None:
   """Validates c_col for DP-BandMF."""
-  if c_col.ndim != 1:
-    raise ValueError('c_col must be a 1D array.')
+  _validate.ndim(1, c_col=c_col)
   if np.any(c_col < 0):
     raise ValueError('c_col must be non-negative.')
 
@@ -648,7 +647,7 @@ def _compute_balls_in_bins_privacy_loss(
   """
   _validate.positive(epoch_length=epoch_length)
   _validate.positive(sigma=sigma)
-  _validate.equal(expected=2, sample_dimension=sample.ndim)
+  _validate.ndim(2, sample=sample)
   iterations = sample.shape[0]
   _validate_c_col(c_col)
   if c_col.size > iterations:
@@ -692,7 +691,7 @@ def _compute_cyclic_poisson_privacy_loss(
   _validate.positive(cycle_length=cycle_length)
   _validate.positive(sigma=sigma)
   _validate.in_range(0, 1, sampling_prob=sampling_prob)
-  _validate.equal(expected=2, sample_dimension=sample.ndim)
+  _validate.ndim(2, sample=sample)
   iterations = sample.shape[0]
   _validate_c_col(c_col)
   _validate.in_range(0, cycle_length, c_col_size=c_col.size)

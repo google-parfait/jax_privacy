@@ -474,11 +474,7 @@ def _maybe_squeeze_axis_1(x: jax.Array) -> jax.Array:
 
 def _validate_is_padding_example(is_padding_example, batch_size: int):
   """Validates the is_padding_example array."""
-  if is_padding_example.ndim != 1:
-    raise ValueError(
-        'is_padding_example must be a 1-D array, got'
-        f' ndim={is_padding_example.ndim}.'
-    )
+  _validate.ndim(1, is_padding_example=is_padding_example)
   _validate.equal(
       batch_size, is_padding_example_len=is_padding_example.shape[0]
   )

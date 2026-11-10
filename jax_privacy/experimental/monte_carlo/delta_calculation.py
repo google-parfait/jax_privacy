@@ -59,9 +59,8 @@ class PrivacyLossSamples:
   support_bound: float = 1.0
 
   def __post_init__(self):
+    _validate.ndim(1, privacy_loss=self.privacy_loss)
     shape = np.shape(self.privacy_loss)
-    if len(shape) != 1:
-      raise ValueError('privacy_loss must be a 1D array.')
     for name in ['counts', 'log_weights']:
       value = getattr(self, name)
       if value is not None and np.shape(value) != shape:

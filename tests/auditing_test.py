@@ -80,7 +80,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
       ('2d', [[0.25, 0.75]]),
   )
   def test_bootstrap_params_non_1d_quantiles(self, quantiles):
-    with self.assertRaisesRegex(ValueError, 'quantiles must be a 1-D sequence'):
+    with self.assertRaisesRegex(
+        ValueError, 'Expected quantiles to have ndim=1'
+    ):
       auditing.BootstrapParams(quantiles=quantiles)
 
   @parameterized.named_parameters(('zero', (0, 0.5)), ('one', (0.5, 1)))
@@ -138,10 +140,17 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   @parameterized.parameters(
       ((),),
       ((1,),),
+      ((1, 2, 3),),
+  )
+  def test_pareto_frontier_bad_ndim(self, shape):
+    points = np.zeros(shape, dtype=np.int64)
+    with self.assertRaisesRegex(ValueError, 'Expected points to have ndim=2'):
+      auditing._pareto_frontier(points)
+
+  @parameterized.parameters(
       ((1, 2),),
       ((2, 1),),
       ((2, 3),),
-      ((1, 2, 3),),
   )
   def test_pareto_frontier_bad_shape(self, shape):
     points = np.zeros(shape, dtype=np.int64)
@@ -760,9 +769,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   )
   def test_auditor_raises_wrong_dim_scores(self, scores):
     other_scores = [1, 2, 3]
-    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+    with self.assertRaisesRegex(ValueError, 'to have ndim=1'):
       auditing.CanaryScoreAuditor(scores, other_scores)
-    with self.assertRaisesRegex(ValueError, 'must be 1-dimensional'):
+    with self.assertRaisesRegex(ValueError, 'to have ndim=1'):
       auditing.CanaryScoreAuditor(other_scores, scores)
 
   def test_auditor_accepts_jax_array(self):
