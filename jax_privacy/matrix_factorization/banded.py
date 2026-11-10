@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from .. import _validate
 from . import optimization
 from . import sensitivity
 from . import streaming_matrix
@@ -85,8 +86,7 @@ class ColumnNormalizedBanded:
       A ColumnNormalizedBanded representation of the banded toeplitz matrix.
     """
     bands = coefs.size
-    if bands > n or bands < 1:
-      raise ValueError(f'len(coefs) must be in the range [1, n], got {bands}')
+    _validate.in_range(1, n, bands=bands)
     coefs = np.asarray(coefs)
     coefs = coefs / np.linalg.norm(coefs)
     params = jnp.broadcast_to(jnp.array(coefs), (n, bands))
@@ -201,8 +201,7 @@ def minsep_sensitivity_squared(
           ' participation pattern.  If it is intentional, please use'
           ' sensitivity.get_sensitivity_banded.'
       )
-    if n > strategy.n:
-      raise ValueError(f'{n=} must be less than or equal to {strategy.n=}.')
+    _validate.in_range(0, strategy.n, n=n)
   return max_participations
 
 

@@ -61,7 +61,9 @@ class GradientClippingTest(parameterized.TestCase):
       )
 
   def test_validate_args_empty_batch(self):
-    with self.assertRaisesRegex(ValueError, 'Batch Argnums must not be empty'):
+    with self.assertRaisesRegex(
+        ValueError, 'Expected batch_argnums to be non-empty'
+    ):
       gradient_clipping.clipped_grad(
           mean_quadratic_loss,
           l2_clip_norm=1.0,

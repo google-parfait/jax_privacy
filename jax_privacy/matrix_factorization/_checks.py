@@ -16,6 +16,8 @@
 
 import numpy as np
 
+from .. import _validate
+
 # Disabling pylint invalid-name to allow mathematical notation including
 # single-capital-letter variables for matrices.
 # See README.md for notation conventions.
@@ -36,12 +38,12 @@ def check_lower_triangular(
 
 
 def check_is_matrix(M: np.typing.ArrayLike, name: str = ''):
-  if np.ndim(M) != 2:
-    raise ValueError(f'Matrix {_pad(name)}has unexpected shape {np.shape(M)}')
+  _validate.ndim(2, **{name or 'matrix': M})
 
 
 def check_square(M: np.typing.ArrayLike, name: str = ''):
-  if (np.ndim(M) != 2) or (np.shape(M)[0] != np.shape(M)[1]):
+  _validate.ndim(2, **{name or 'matrix': M})
+  if np.shape(M)[0] != np.shape(M)[1]:
     raise ValueError(f'Matrix {_pad(name)}should be square, found\n{M}')
 
 

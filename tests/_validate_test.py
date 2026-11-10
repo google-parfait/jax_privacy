@@ -50,6 +50,47 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y='):
       _validate.in_range(0, 1, x=0.5, y=1.5)
 
+  def test_array_values(self):
+    _validate.non_negative(x=[0.0, 1.0], y=jax.numpy.zeros((2, 2)))
+    _validate.positive(x=[0.5, 1.0], y=jax.numpy.ones((2, 2)))
+    _validate.in_range(0, 1, closed='neither', x=[0.25, 0.75])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.non_negative(x=[0.0, -0.1])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.positive(x=[1.0, 0.0])
+    with self.assertRaisesRegex(ValueError, 'Expected x='):
+      _validate.in_range(0, 1, closed='neither', x=[0.5, 1.0])
+
+  def test_ndim(self):
+    _validate.ndim(1, x=[1, 2, 3], y=jax.numpy.zeros(4))
+    _validate.ndim(2, m=jax.numpy.eye(3))
+    with self.assertRaisesRegex(ValueError, 'Expected x to have ndim=1, got 0'):
+      _validate.ndim(1, x=3.0)
+    with self.assertRaisesRegex(ValueError, 'Expected y to have ndim=1, got 2'):
+      _validate.ndim(1, x=[1, 2], y=[[1, 2]])
+
+  def test_non_empty(self):
+    _validate.non_empty(
+        x=[1], y=(1, 2), z=jax.numpy.zeros(3), s=jax.numpy.array(1)
+    )
+    with self.assertRaisesRegex(ValueError, 'Expected x to be non-empty'):
+      _validate.non_empty(x=[])
+    with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
+      _validate.non_empty(x=[1], y=jax.numpy.zeros((0, 2)))
+    with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
+      _validate.non_empty(x=[1], y=jax.numpy.zeros((2, 0)))
+
+  def test_same_shape(self):
+    _validate.same_shape(
+        x=jax.numpy.zeros((2, 3)), y=jax.numpy.ones((2, 3)), z=[[1, 2, 3]] * 2
+    )
+    with self.assertRaisesRegex(
+        ValueError,
+        r'Expected all of \(x, y\) to have the same shape, got'
+        r' x=\(2, 3\), y=\(2, 2\)',
+    ):
+      _validate.same_shape(x=jax.numpy.zeros((2, 3)), y=jax.numpy.zeros((2, 2)))
+
   def test_jitted(self):
     _validate.jitted(False)
     with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):

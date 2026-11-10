@@ -14,14 +14,45 @@
 
 """Randomness, seeding, and sampling utilities for jax_privacy."""
 
+import copy
 import math
+import secrets
 from typing import Protocol
 
 import jax
+from jax.experimental import multihost_utils
 from jax_privacy import _validate
 from jax_privacy import sharding_utils
 import numpy as np
 import optax
+
+
+def secure_seed(bits: int = 31) -> int:
+  """Returns a cryptographically secure random integer shared across hosts."""
+  _validate.positive(bits=bits)
+  raw = secrets.randbits(bits).to_bytes(math.ceil(bits / 8), 'big')
+  arr = np.frombuffer(raw, dtype=np.uint8)
+  shared = multihost_utils.broadcast_one_to_all(arr)
+  return int.from_bytes(np.asarray(shared, dtype=np.uint8).tobytes(), 'big')
+
+
+def default_rng(
+    rng: np.random.Generator | int | None = None,
+) -> np.random.Generator:
+  """Returns a Generator, drawing a shared secure seed if None."""
+  if rng is None:
+    rng = secure_seed()
+  rng = np.random.default_rng(rng)
+  _validate.equal_across_hosts(rng=copy.deepcopy(rng).integers(2**31))
+  return rng
+
+
+def default_prng_key(
+    rng: np.random.Generator | int | None = None,
+) -> jax.Array:
+  """Returns a JAX PRNGKey from a Generator, seed, or None."""
+  seed = default_rng(rng).integers(2**31)
+  return jax.random.key(int(seed))
 
 
 class Sampler(Protocol):
