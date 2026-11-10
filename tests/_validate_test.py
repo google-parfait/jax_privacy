@@ -58,6 +58,17 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y to have ndim=1, got 2'):
       _validate.ndim(1, x=[1, 2], y=[[1, 2]])
 
+  def test_non_empty(self):
+    _validate.non_empty(
+        x=[1], y=(1, 2), z=jax.numpy.zeros(3), s=jax.numpy.array(1)
+    )
+    with self.assertRaisesRegex(ValueError, 'Expected x to be non-empty'):
+      _validate.non_empty(x=[])
+    with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
+      _validate.non_empty(x=[1], y=jax.numpy.zeros((0, 2)))
+    with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
+      _validate.non_empty(x=[1], y=jax.numpy.zeros((2, 0)))
+
   def test_jitted(self):
     _validate.jitted(False)
     with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):

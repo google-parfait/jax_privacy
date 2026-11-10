@@ -84,6 +84,14 @@ def ndim(expected: int, **kwargs):
       )
 
 
+def non_empty(**kwargs):
+  """Validates that all values are non-empty."""
+  for name, value in kwargs.items():
+    size = value.size if hasattr(value, 'size') else len(value)
+    if size == 0:
+      raise ValueError(f'Expected {name} to be non-empty.')
+
+
 def same_tree_structure(reference, **kwargs):
   """Validates that all values have the same PyTree structure as reference."""
   expected = jax.tree.structure(reference)
@@ -195,8 +203,7 @@ def unique_edge_pairs(example_ids, user_ids):
   ndim(1, example_ids=example_ids, user_ids=user_ids)
   if len(example_ids) != len(user_ids):
     raise ValueError('example_ids and user_ids must have the same length')
-  if len(example_ids) == 0:
-    raise ValueError('empty graphs are not allowed.')
+  non_empty(example_ids=example_ids)
   pairs = np.stack([example_ids, user_ids], axis=1)
   if len(np.unique(pairs, axis=0)) < len(pairs):
     raise ValueError('Duplicate (example, user) id pairs are not allowed.')

@@ -476,8 +476,7 @@ def perform_calibration_from_samples(
     :math:`(\varepsilon, \text{base\_delta})`-DP (i.e., one that can be
     calibrated without Monte Carlo verification).
   """  # fmt: skip
-  if not positive_samples:
-    raise ValueError('positive_samples must be non-empty.')
+  _validate.non_empty(positive_samples=positive_samples)
   num_values = len(positive_samples)
   if negative_samples is None:
     negative_samples = [None] * num_values

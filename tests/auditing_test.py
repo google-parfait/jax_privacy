@@ -72,7 +72,9 @@ def _scores_with_circular_roc(
 class CanaryScoreAuditorTest(parameterized.TestCase):
 
   def test_bootstrap_params_empty_quantiles(self):
-    with self.assertRaisesRegex(ValueError, 'quantiles cannot be empty'):
+    with self.assertRaisesRegex(
+        ValueError, 'Expected quantiles to be non-empty'
+    ):
       auditing.BootstrapParams(quantiles=[])
 
   @parameterized.named_parameters(
@@ -757,9 +759,9 @@ class CanaryScoreAuditorTest(parameterized.TestCase):
   def test_auditor_raises_empty_scores(self):
     scores = []
     other_scores = [1, 2, 3]
-    with self.assertRaisesRegex(ValueError, 'must be non-empty'):
+    with self.assertRaisesRegex(ValueError, 'to be non-empty'):
       auditing.CanaryScoreAuditor(scores, other_scores)
-    with self.assertRaisesRegex(ValueError, 'must be non-empty'):
+    with self.assertRaisesRegex(ValueError, 'to be non-empty'):
       auditing.CanaryScoreAuditor(other_scores, scores)
 
   @parameterized.named_parameters(

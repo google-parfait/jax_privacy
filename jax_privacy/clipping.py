@@ -723,8 +723,7 @@ def _validate_static_args(argnums, batch_argnums, normalize_by):
     argnums = (argnums,)
   if isinstance(batch_argnums, int):
     batch_argnums = (batch_argnums,)
-  if not batch_argnums:
-    raise ValueError('Batch Argnums must not be empty.')
+  _validate.non_empty(batch_argnums=batch_argnums)
   if min(argnums + batch_argnums) < 0:
     raise ValueError(
         f'argnums={argnums} and batch_argnums={batch_argnums} must be >= 0.'

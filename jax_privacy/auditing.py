@@ -285,8 +285,7 @@ class BootstrapParams:
   def __post_init__(self):
     quantile_arr = np.asarray(self.quantiles)
     _validate.ndim(1, quantiles=quantile_arr)
-    if quantile_arr.size == 0:
-      raise ValueError('quantiles cannot be empty.')
+    _validate.non_empty(quantiles=quantile_arr)
     if not np.all((0 < quantile_arr) & (quantile_arr < 1)):
       raise ValueError(f'quantiles must be in (0, 1), got {self.quantiles}.')
     if self.acceleration and not self.bias_correction:
@@ -563,10 +562,10 @@ class CanaryScoreAuditor:
     """
     self._in_canary_scores = np.asarray(in_canary_scores)
     self._out_canary_scores = np.asarray(out_canary_scores)
-    if self._in_canary_scores.size == 0:
-      raise ValueError('in_canary_scores must be non-empty.')
-    if self._out_canary_scores.size == 0:
-      raise ValueError('out_canary_scores must be non-empty.')
+    _validate.non_empty(
+        in_canary_scores=self._in_canary_scores,
+        out_canary_scores=self._out_canary_scores,
+    )
     _validate.ndim(
         1,
         in_canary_scores=self._in_canary_scores,
