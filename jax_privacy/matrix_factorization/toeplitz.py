@@ -269,12 +269,8 @@ def multiply(
     :math:`L = \text{materialize\_lower\_triangular}(\text{lhs\_coef}, n)` and
     :math:`R = \text{materialize\_lower\_triangular}(\text{rhs\_coef}, n)`.
   """
-  if n is None and len(lhs_coef) != len(rhs_coef):
-    raise ValueError(
-        'If n is not specified, then lhs_coef and rhs_coef must have the same'
-        ' length, but found lhs_coef of length'
-        f' {len(lhs_coef)=} and rhs_coef of length {len(rhs_coef)=}.'
-    )
+  if n is None:
+    _validate.same_shape(lhs_coef=lhs_coef, rhs_coef=rhs_coef)
   lhs_coef, n = _reconcile(lhs_coef, n)
   rhs_coef, _ = _reconcile(rhs_coef, n)
   return jnp.convolve(

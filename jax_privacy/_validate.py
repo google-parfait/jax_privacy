@@ -92,6 +92,17 @@ def non_empty(**kwargs):
       raise ValueError(f'Expected {name} to be non-empty.')
 
 
+def same_shape(**kwargs):
+  """Validates that all values have the same shape."""
+  shapes = {name: np.shape(value) for name, value in kwargs.items()}
+  if len(set(shapes.values())) > 1:
+    names = ', '.join(kwargs)
+    got = ', '.join(f'{name}={shape}' for name, shape in shapes.items())
+    raise ValueError(
+        f'Expected all of ({names}) to have the same shape, got {got}.'
+    )
+
+
 def same_tree_structure(reference, **kwargs):
   """Validates that all values have the same PyTree structure as reference."""
   expected = jax.tree.structure(reference)
@@ -201,8 +212,7 @@ def unique_edge_pairs(example_ids, user_ids):
   example_ids = np.asarray(example_ids)
   user_ids = np.asarray(user_ids)
   ndim(1, example_ids=example_ids, user_ids=user_ids)
-  if len(example_ids) != len(user_ids):
-    raise ValueError('example_ids and user_ids must have the same length')
+  same_shape(example_ids=example_ids, user_ids=user_ids)
   non_empty(example_ids=example_ids)
   pairs = np.stack([example_ids, user_ids], axis=1)
   if len(np.unique(pairs, axis=0)) < len(pairs):

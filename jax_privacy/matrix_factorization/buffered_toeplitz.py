@@ -197,12 +197,9 @@ class BufferedToeplitz:
           f'buf_decay.shape = {self.buf_decay.shape} and '
           f'output_scale.shape = {self.output_scale.shape}'
       )
-    if self.buf_decay.shape != self.output_scale.shape:
-      raise ValueError(
-          'buf_decay and output_scale must have the same length, but '
-          f'buf_decay.shape = {self.buf_decay.shape} !='
-          f' output_scale.shape = {self.output_scale.shape}'
-      )
+    _validate.same_shape(
+        buf_decay=self.buf_decay, output_scale=self.output_scale
+    )
     if self.buf_decay.dtype != self.output_scale.dtype:
       raise ValueError(
           'buf_decay and output_scale must have the same dtype, but '

@@ -60,11 +60,11 @@ class PrivacyLossSamples:
 
   def __post_init__(self):
     _validate.ndim(1, privacy_loss=self.privacy_loss)
-    shape = np.shape(self.privacy_loss)
-    for name in ['counts', 'log_weights']:
-      value = getattr(self, name)
-      if value is not None and np.shape(value) != shape:
-        raise ValueError(f'{name} must have the same shape as privacy_loss.')
+    _validate.same_shape(**{
+        k: v
+        for k in ['privacy_loss', 'counts', 'log_weights']
+        if (v := getattr(self, k)) is not None
+    })
     if self.counts is not None and self.log_weights is not None:
       raise ValueError(
           'counts cannot be combined with log_weights: discretizing'

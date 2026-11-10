@@ -69,6 +69,17 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y to be non-empty'):
       _validate.non_empty(x=[1], y=jax.numpy.zeros((2, 0)))
 
+  def test_same_shape(self):
+    _validate.same_shape(
+        x=jax.numpy.zeros((2, 3)), y=jax.numpy.ones((2, 3)), z=[[1, 2, 3]] * 2
+    )
+    with self.assertRaisesRegex(
+        ValueError,
+        r'Expected all of \(x, y\) to have the same shape, got'
+        r' x=\(2, 3\), y=\(2, 2\)',
+    ):
+      _validate.same_shape(x=jax.numpy.zeros((2, 3)), y=jax.numpy.zeros((2, 2)))
+
   def test_jitted(self):
     _validate.jitted(False)
     with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):

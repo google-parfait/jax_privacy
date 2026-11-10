@@ -251,7 +251,8 @@ class ToeplitzTest(parameterized.TestCase):
     lhs_coef = jnp.array([1, 2, 3, 4])
     rhs_coef = jnp.array([5, 6])
     with self.assertRaisesRegex(
-        ValueError, 'lhs_coef and rhs_coef must have the same length'
+        ValueError,
+        r'Expected all of \(lhs_coef, rhs_coef\) to have the same shape',
     ):
       toeplitz.multiply(lhs_coef, rhs_coef, n=None)
 

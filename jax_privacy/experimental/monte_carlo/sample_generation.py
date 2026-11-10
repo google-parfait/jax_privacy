@@ -970,8 +970,8 @@ def compute_privacy_loss(
           'aux for b-min-sep sampling must be set if and only if '
           'strategy.truncated_batch_size is not None.'
       )
-    if aux is not None and aux.shape != sample.shape:
-      raise ValueError('aux must have the same shape as sample.')
+    if aux is not None:
+      _validate.same_shape(sample=sample, aux=aux)
     return _compute_b_min_sep_privacy_loss(
         strategy=strategy,
         samples=sample,

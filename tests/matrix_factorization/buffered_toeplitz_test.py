@@ -178,7 +178,8 @@ class BufferedToeplitzTest(parameterized.TestCase):
 
   def test_validate_param_lengths_match(self):
     with self.assertRaisesRegex(
-        ValueError, 'buf_decay and output_scale must have the same length'
+        ValueError,
+        r'Expected all of \(buf_decay, output_scale\) to have the same shape',
     ):
       buffered_toeplitz.BufferedToeplitz.build(
           buf_decay=[0.9, 0.8], output_scale=[0.1]
