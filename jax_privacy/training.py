@@ -55,6 +55,7 @@ import jax
 import jax_privacy
 from jax_privacy import _compilation
 from jax_privacy import _data_loading
+from jax_privacy import _random
 from jax_privacy import _validate
 from jax_privacy import auditing
 from jax_privacy import execution_plan
@@ -297,18 +298,6 @@ class DPTrainer:
     )
     return new_state, aux
 
-  def _precompile(
-      self,
-      dataset: Dataset,
-      state: TrainingState,
-      *,
-      rng_or_seed: np.random.Generator | int | None = None,
-  ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
-    """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
-    return _compilation.precompile(
-        self, dataset, state, rng_or_seed=rng_or_seed
-    )
-
   def fit(
       self,
       dataset: Dataset,
@@ -358,20 +347,18 @@ class DPTrainer:
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
 
+    rng = _random.default_rng(rng_or_seed)
+    prng_key = _random.default_prng_key(rng)
     if (
         precompile
         or getattr(self.compilation_strategy, "multiple", None) is None
     ):
-      trainer, futures = self._precompile(
-          dataset, state, rng_or_seed=rng_or_seed
-      )
+      # precompile copies rng internally so rng stays aligned with
+      # batch_iterator (avoiding unanticipated or out-of-order compilations).
+      trainer, futures = _compilation.precompile(self, dataset, state, rng=rng)
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     assert trainer.compilation_strategy.multiple is not None
     warn_on_cache_miss = bool(futures)
-
-    # We need tight alignment between how rng is used here and in precompile().
-    rng = np.random.default_rng(rng_or_seed)
-    prng_key = jax.random.key(int(rng.integers(2**63)))
 
     with _compilation.hoist_closed_over_constants():
       axis = trainer.performance_flags.batch_axis_name

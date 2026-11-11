@@ -91,7 +91,10 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=2)
     batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertLen(batches, 2)
@@ -112,7 +115,10 @@ class BatchIteratorTest(parameterized.TestCase):
 
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertEqual(batch.shape, (0, 2))
@@ -128,7 +134,10 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=1)
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertEqual(batch['x'].shape, (4, 3))
@@ -144,12 +153,19 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=5)
     all_batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=42, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(42),
+            pad_to_multiple_of=4,
         )
     )
     resumed_batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=42, pad_to_multiple_of=4, initial_step=2
+            dataset,
+            strategy,
+            rng=np.random.default_rng(42),
+            pad_to_multiple_of=4,
+            initial_step=2,
         )
     )
     self.assertLen(resumed_batches, 3)
@@ -166,7 +182,7 @@ class BatchIteratorTest(parameterized.TestCase):
         _data_loading.batch_iterator(
             dataset,
             strategy,
-            rng=0,
+            rng=np.random.default_rng(0),
             pad_to_multiple_of=4,
             microbatch_size=2,
         )
@@ -188,7 +204,9 @@ class BatchIteratorTest(parameterized.TestCase):
         ) as mock_assert_equal,
     ):
       [(batch, _)] = list(
-          _data_loading.batch_iterator(dataset, strategy, rng=42)
+          _data_loading.batch_iterator(
+              dataset, strategy, rng=np.random.default_rng(42)
+          )
       )
     self.assertEqual(mock_assert_equal.call_count, 2)
     for call in mock_assert_equal.call_args_list:
@@ -222,7 +240,7 @@ class BatchIteratorTest(parameterized.TestCase):
         _data_loading.batch_iterator(
             dataset,
             strategy,
-            rng=0,
+            rng=np.random.default_rng(0),
             pad_to_multiple_of=4,
             padding_example=spec,
         )
@@ -240,7 +258,10 @@ class BatchIteratorTest(parameterized.TestCase):
     self.assertLen(
         list(
             _data_loading.batch_iterator(
-                dataset, strategy, rng=0, padding_example=valid_spec
+                dataset,
+                strategy,
+                rng=np.random.default_rng(0),
+                padding_example=valid_spec,
             )
         ),
         1,
@@ -250,7 +271,7 @@ class BatchIteratorTest(parameterized.TestCase):
           _data_loading.batch_iterator(
               dataset,
               strategy,
-              rng=0,
+              rng=np.random.default_rng(0),
               padding_example={'x': jax.ShapeDtypeStruct((3,), np.float32)},
           )
       )
@@ -259,7 +280,7 @@ class BatchIteratorTest(parameterized.TestCase):
           _data_loading.batch_iterator(
               dataset,
               strategy,
-              rng=0,
+              rng=np.random.default_rng(0),
               padding_example={'y': jax.ShapeDtypeStruct((2,), np.float32)},
           )
       )
@@ -824,8 +845,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=42
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(42)
     )
 
     self.assertIsInstance(futures, dict)
@@ -850,8 +871,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         optimizer=optimizer,
         compilation_strategy=training.PadToMultiple(multiple=padding_multiple),
     )
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=0
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(0)
     )
 
     for size in futures:
@@ -876,8 +897,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
 
     rng = np.random.default_rng(42)
     state_before = rng.__getstate__()
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=rng
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=rng
     )
     state_after = rng.__getstate__()
 
@@ -899,15 +920,19 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    _, futures = trainer._precompile(
-        dataset, jax.eval_shape(trainer.init, params), rng_or_seed=0
+    _, futures = _compilation.precompile(
+        trainer,
+        dataset,
+        jax.eval_shape(trainer.init, params),
+        rng=np.random.default_rng(0),
     )
 
     self.assertNotEmpty(futures)
     for future in futures.values():
       future.result()
 
-  def test_fit_precompile_aot_compiles_all_sizes(self):
+  @parameterized.parameters(0, None)
+  def test_fit_precompile_aot_compiles_all_sizes(self, rng_or_seed):
     """precompile=True should AOT-compile once per unique batch size."""
     trace_count = [0]
 
@@ -932,12 +957,18 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     )
 
     with self.assertLogs(level='INFO') as logs:
-      trainer.fit(dataset, trainer.init(params), rng_or_seed=0, precompile=True)
+      trainer.fit(
+          dataset,
+          trainer.init(params),
+          rng_or_seed=rng_or_seed,
+          precompile=True,
+      )
       for log in logs.output:
         self.assertIn('AOT-compiling train_step for batch size', log)
         self.assertNotIn('JIT-compiling train_step for batch size', log)
-      self.assertEqual(trace_count[0], 5)
-      self.assertLen(logs.output, 5)
+      self.assertLen(logs.output, trace_count[0])
+      if rng_or_seed == 0:
+        self.assertEqual(trace_count[0], 5)
 
   def test_precompile_dedupes_shared_padded_sizes(self):
     """Steps sharing a padded size are lowered and compiled only once."""
@@ -1005,8 +1036,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         optimizer=optax.sgd(0.01),
     )
 
-    resolved, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=0
+    resolved, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(0)
     )
     self.assertEqual(resolved.compilation_strategy.multiple % 6, 0)
     self.assertLen(futures, 1)

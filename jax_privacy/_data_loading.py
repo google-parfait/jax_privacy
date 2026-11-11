@@ -47,8 +47,8 @@ def _from_pytree(
     dataset: optax.ArrayTree,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -90,8 +90,8 @@ def _from_pygrain(
     dataset: grain.RandomAccessDataSource,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -151,8 +151,8 @@ def batch_iterator(
     dataset: Any,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -173,11 +173,11 @@ def batch_iterator(
       example dimension, or a ``grain.MapDataset`` (or
       ``grain.RandomAccessDataSource``).
     strategy: Batch selection strategy producing per-step example indices.
+    rng: Random number generator for batch sampling.
     padding_example: Optional single-example PyTree specification (arrays or
       ``jax.ShapeDtypeStruct``) defining the structure, shapes, and dtypes of
       zero-padded examples. If omitted on a ``MapDataset``, it is inferred from
       ``dataset[0]``.
-    rng: Optional random seed or ``numpy.random.Generator`` for batch sampling.
     pad_to_multiple_of: Pads each batch size to a multiple of this integer.
     microbatch_size: Optional microbatch size used to reorder padding examples
       for early stopping.
