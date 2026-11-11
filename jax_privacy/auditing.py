@@ -263,9 +263,11 @@ class BootstrapParams:
   quantiles to report, and the seed for the random number generator.
 
   Optionally performs bias correction and acceleration for the bootstrap
-  [B. Efron, "Bootstrap Confidence Intervals", Statist. Sci. 2(3), 189-228
-  (1987)]. Be aware that acceleration requires jackknife resampling, which
-  computes the function n times for n total canaries.
+  [B. Efron, "Better Bootstrap Confidence Intervals", J. Amer. Statist. Assoc.
+  82(397), 171-185 (1987); T. J. DiCiccio and B. Efron, "Bootstrap Confidence
+  Intervals", Statist. Sci. 11(3), 189-228 (1996)]. Be aware that acceleration
+  requires jackknife resampling, which computes the function n times for n
+  total canaries.
 
   Attributes:
     num_samples: The number of times to resample the canary scores.
@@ -1002,8 +1004,9 @@ class CanaryScoreAuditor:
   ) -> float:
     r"""Computes lower bound on epsilon for a single round of auditing.
 
-    This is an implementation of the method from Steinke et al. 2024, "Privacy
-    Auditing in One (1) Training Run": https://arxiv.org/abs/2305.08846.
+    This is an implementation of the method from Steinke et al. (2023),
+    "Privacy Auditing with One (1) Training Run":
+    https://arxiv.org/abs/2305.08846.
 
     Currently only one-sided hypotheses are supported (:math:`k_- = 0`).
 

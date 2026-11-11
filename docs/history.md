@@ -18,7 +18,7 @@ limitations under the License. -->
 
 When JAX Privacy was initially released alongside
 [De et al. (2022)](https://arxiv.org/abs/2204.13650) and
-[Berrada et al. (2023)](https://arxiv.org/abs/2303.05555), a primary engineering
+[Berrada et al. (2023)](https://arxiv.org/abs/2308.10888), a primary engineering
 goal was making DP-SGD fast and scalable on modern accelerators. At the time,
 existing frameworks like
 [TensorFlow Privacy](https://github.com/tensorflow/privacy) made per-example
