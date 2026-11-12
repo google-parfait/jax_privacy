@@ -14,10 +14,23 @@
 
 """Tests for reproducible synthetic logistic-regression benchmarks."""
 
+import importlib.util
+import pathlib
+
 from absl.testing import absltest
-from examples import dp_logistic_regression
 import jax
 import numpy as np
+
+
+_SPEC = importlib.util.spec_from_file_location(
+    'dp_logistic_regression',
+    pathlib.Path(__file__).resolve().parents[1]
+    / 'examples'
+    / 'dp_logistic_regression.py',
+)
+assert _SPEC is not None and _SPEC.loader is not None
+dp_logistic_regression = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(dp_logistic_regression)
 
 
 class LogisticRegressionBenchmarkTest(absltest.TestCase):
