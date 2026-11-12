@@ -15,14 +15,26 @@
 """Tests for the data-loading example's unpadded Grain iterator."""
 
 import contextlib
+import importlib.util
 import io
+import pathlib
 from unittest import mock
 
 from absl.testing import absltest
 from absl.testing import flagsaver
 from absl.testing import parameterized
-from examples import data_loading
 import numpy as np
+
+
+_SPEC = importlib.util.spec_from_file_location(
+    'data_loading',
+    pathlib.Path(__file__).resolve().parents[1]
+    / 'examples'
+    / 'data_loading.py',
+)
+assert _SPEC is not None and _SPEC.loader is not None
+data_loading = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(data_loading)
 
 
 class DataLoadingExampleTest(parameterized.TestCase):
