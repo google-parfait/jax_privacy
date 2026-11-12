@@ -142,7 +142,7 @@ def generate_noise(
           strategy_coefs, column_normalize_for_n=iterations
       ),
       stddev=1.0,
-      prng_key=jax.random.key(0),
+      rng=0,
       intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
   )
 

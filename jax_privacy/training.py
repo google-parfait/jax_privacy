@@ -218,7 +218,7 @@ class DPTrainer:
   @functools.cached_property
   def plan(self) -> execution_plan.DPExecutionPlan:
     """``DPExecutionPlan`` built from ``config`` and ``performance_flags``."""
-    return self.config.make(self.performance_flags, noise_seed=self.noise_seed)
+    return self.config.make(self.performance_flags, rng=self.noise_seed)
 
   @jax.jit(static_argnames=["self"])
   def init(self, params: Params) -> TrainingState:
@@ -325,8 +325,8 @@ class DPTrainer:
       rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
         sampling batches (impacting privacy) and initializing the loss PRNG key
         (potentially impacting utility). Does not influence the noise addition
-        transform, which is configured via the
-        :class:`~jax_privacy.execution_plan.DPExecutionPlan`.
+        transform, which is seeded via ``noise_seed`` on
+        :class:`~jax_privacy.training.DPTrainer`.
       precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
@@ -429,7 +429,8 @@ def audit(
     untrained: Params | None = None,
     *,
     microbatch_size: int | None = None,
-    prng_key: jax.Array | int = 0,
+    rng: np.random.Generator | int | None = None,
+    prng_key: jax.Array | int | None = None,
 ) -> auditing.CanaryScoreAuditor:
   """Scores held-in and held-out canaries and returns an auditor.
 
@@ -442,14 +443,16 @@ def audit(
       as ``loss(untrained) - loss(trained)``. If ``None``, scores are
       ``-loss(trained)``.
     microbatch_size: Optional microbatch size for evaluating ``loss_fn``.
-    prng_key: Random seed or PRNG key for loss_fn evaluation.
+    rng: Optional random seed or ``numpy.random.Generator`` for ``loss_fn``
+      evaluation.
+    prng_key: Deprecated; use ``rng`` instead.
 
   Returns:
     A :class:`~jax_privacy.auditing.CanaryScoreAuditor` initialized with the
     held-in and held-out canary scores.
   """
-  if isinstance(prng_key, int):
-    prng_key = jax.random.key(prng_key)
+  rng = _random.resolve_rng(rng, prng_key=prng_key)
+  prng_key = _random.default_prng_key(rng)
   in_key, out_key = jax.random.split(prng_key)
   args = (loss_fn, trained)
   kw = dict(untrained=untrained, microbatch_size=microbatch_size)
