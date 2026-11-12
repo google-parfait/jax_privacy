@@ -75,7 +75,7 @@ def main(_):
   else:
 
     def map_fn(x):
-      return x, np.zeros(FLAGS.batch_size, dtype=np.bool)
+      return x, np.bool_(False)
 
     options = grain.ReadOptions(num_threads=max_workers)
     iterator = itertools.islice(
