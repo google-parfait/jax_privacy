@@ -102,7 +102,9 @@ def resolve_rng(
   )
   if isinstance(value, jax.Array):
     _validate.jitted(False)
-    return int(np.asarray(jax.random.key_data(value)).flat[-1])
+    # Preserve every key word, using a fixed byte order across platforms.
+    key_data = np.asarray(jax.random.key_data(value), dtype='>u4')
+    return int.from_bytes(key_data.tobytes(), 'big')
   return value
 
 
