@@ -585,6 +585,34 @@ class KerasApiTest(parameterized.TestCase):
           expected_epoch_1_microbatches[i],
       )
 
+  # seed=None draws a random int64 seed, which can be negative.
+  @parameterized.parameters(-1, np.iinfo(np.int64).min, None)
+  def test_poisson_sampled_training_dataset_accepts_negative_seed(self, seed):
+    x = np.arange(24).reshape(12, 2)
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=1.1,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=4,
+        gradient_accumulation_steps=1,
+        train_steps=20,
+        train_size=len(x),
+        noise_multiplier=10.0,
+        seed=seed,
+    )
+    with mock.patch.object(
+        keras_api, "_get_random_int64", return_value=np.int64(-1)
+    ):
+      datasets = [
+          keras_api._PoissonSampledTrainingDataset(
+              x, None, None, dp_params=dp_params, steps_per_epoch=3
+          )
+          for _ in range(2)
+      ]
+    self.assertLen(datasets[0], 3)
+    for batch_a, batch_b in zip(*(d._epoch_batches for d in datasets)):
+      np.testing.assert_array_equal(batch_a, batch_b)
+
   def test_calculate_optimizer_steps_to_perform_in_fit_with_gas(self):
     train_size = 100
     batch_size = 10
