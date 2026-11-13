@@ -96,7 +96,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix=strategy_inverse_fn(),
         stddev=1.0,
-        prng_key=jax.random.key(0),
+        rng=0,
         intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
     )
 
@@ -132,7 +132,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     privatizer = noise_addition.matrix_factorization_privatizer(
         noising_matrix=noising_matrix,
         stddev=1.0,
-        prng_key=jax.random.key(0),
+        rng=0,
         intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
     )
 
@@ -171,7 +171,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
       privatizer = noise_addition.matrix_factorization_privatizer(
           noising_matrix=strategy_inverse_fn(),
           stddev=1.0,
-          prng_key=jax.random.key(0),
+          rng=0,
           dtype=jnp.float32,
           intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
       )
@@ -235,7 +235,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
     with jax.sharding.use_abstract_mesh(jax.sharding.AbstractMesh((), ())):
       base_priv = noise_addition.gaussian_privatizer(
           stddev=1.0,
-          prng_key=0,
+          rng=0,
           intermediate_strategy=noise_addition.SupportedStrategies.ZERO,
       )
     mesh = jax.make_mesh(
@@ -258,7 +258,7 @@ class ShardedNoiseGenerationTest(parameterized.TestCase):
 
   def test_with_sharding_specs_invalid_setup_raises(self):
     pspec = jax.sharding.PartitionSpec('x', 'y')
-    base_priv = noise_addition.gaussian_privatizer(stddev=1.0, prng_key=0)
+    base_priv = noise_addition.gaussian_privatizer(stddev=1.0, rng=0)
     with self.assertRaisesRegex(ValueError, 'PartitionSpec or NamedSharding'):
       sharding_utils.with_sharding_specs(base_priv, 'invalid_spec')
     priv = sharding_utils.with_sharding_specs(base_priv, pspec)

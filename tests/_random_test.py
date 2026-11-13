@@ -80,6 +80,27 @@ class RandomTest(parameterized.TestCase):
     )
     self.assertTrue(jnp.array_equal(none_key, expected_none))
 
+  def test_resolve_rng_passthrough(self):
+    rng = np.random.default_rng(42)
+    self.assertIsNone(_random.resolve_rng())
+    self.assertEqual(_random.resolve_rng(7), 7)
+    self.assertIsNone(_random.resolve_rng(None, noise_seed=None))
+    self.assertEqual(_random.resolve_rng(7, noise_seed=None), 7)
+    self.assertIs(_random.resolve_rng(rng, prng_key=None), rng)
+
+  def test_resolve_rng_deprecated_warns_and_rejects_conflict(self):
+    with self.assertLogs(level='WARNING') as logs:
+      self.assertEqual(_random.resolve_rng(noise_seed=12), 12)
+      self.assertEqual(_random.resolve_rng(prng_key=jax.random.key(12)), 12)
+    self.assertLen(logs.output, 2)
+    self.assertTrue(all('2.6 (12/26)' in m for m in logs.output))
+    with self.assertRaisesRegex(ValueError, 'At most one RNG argument'):
+      _random.resolve_rng(rng=1, prng_key=jax.random.key(2))
+    with self.assertRaisesRegex(ValueError, 'At most one RNG argument'):
+      _random.resolve_rng(noise_seed=1, prng_key=2)
+    with self.assertRaisesRegex(RuntimeError, 'outside a jitted context'):
+      jax.jit(lambda k: _random.resolve_rng(prng_key=k))(jax.random.key(0))
+
   def test_uniqueness(self):
     rng = np.random.default_rng(42)
     shape = (104,)

@@ -982,7 +982,9 @@ def _noised_clipped_grads(
   l2_sensitivity = clipped_grad_fn.l2_norm_bound
   accumulation_factor = np.sqrt(dp_params.gradient_accumulation_steps)
   stddev = noise_multiplier * l2_sensitivity / accumulation_factor
-  privatizer = noise_addition.gaussian_privatizer(stddev=stddev)
+  # Runs under jax.jit and only calls privatizer.update on pre-initialized
+  # noise_state; pass an unused int seed to skip default_rng(None) host sync.
+  privatizer = noise_addition.gaussian_privatizer(stddev=stddev, rng=0)
 
   noisy_grads, new_noise_state = privatizer.update(clipped_grad, noise_state)
 

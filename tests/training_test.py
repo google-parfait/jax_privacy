@@ -62,8 +62,8 @@ class _FixedPlanConfig:
 
   plan: execution_plan.DPExecutionPlan
 
-  def make(self, performance_flags=None, noise_seed=None):
-    del performance_flags, noise_seed  # The plan is already built.
+  def make(self, performance_flags=None, rng=None, *, noise_seed=None):
+    del performance_flags, rng, noise_seed  # The plan is already built.
     return self.plan
 
 
@@ -1280,6 +1280,26 @@ class DPTrainerCanaryAuditTest(parameterized.TestCase):
         )
       spy.assert_called_once()
       self.assertAlmostEqual(float(auditor.attack_auroc()), 1.0)
+
+  def test_deprecated_audit_prng_key_warns_and_matches_rng(self):
+    held_in = np.full((4, 2), 2.0, dtype=np.float32)
+    trained = jnp.full((2,), 2.0)
+
+    def stochastic_loss(params, batch, prng):
+      loss = jnp.mean((params - batch) ** 2) + jax.random.normal(prng)
+      return loss, {'loss': loss}
+
+    args = (stochastic_loss, trained, held_in, -held_in)
+    with self.assertLogs(level='WARNING') as logs:
+      auditor1 = training.audit(*args, prng_key=jax.random.key(0))
+    self.assertTrue(any('deprecated' in m for m in logs.output))
+    auditor2 = training.audit(*args, rng=0)
+    np.testing.assert_allclose(
+        auditor1._in_canary_scores, auditor2._in_canary_scores
+    )
+    np.testing.assert_allclose(
+        auditor1._out_canary_scores, auditor2._out_canary_scores
+    )
 
 
 if __name__ == '__main__':
