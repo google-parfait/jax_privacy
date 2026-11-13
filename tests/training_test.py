@@ -285,6 +285,34 @@ class BatchIteratorTest(parameterized.TestCase):
           )
       )
 
+  @parameterized.product(
+      to_dataset=(lambda x: x, _as_map_dataset),
+      layout=((1, 2, 3), (2, 1, 4)),
+  )
+  def test_sharded_batch_only_requires_replica_divisibility(
+      self, to_dataset, layout
+  ):
+    num_replicas, num_model, batch_size = layout
+    raw = np.arange(12, dtype=np.float32).reshape((6, 2))
+    dataset = to_dataset(raw)
+    devices = np.array(jax.devices()).reshape((num_replicas, num_model))
+    mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+    sharding = jax.sharding.NamedSharding(mesh, jax.P('replica'))
+    strategy = batch_selection.FixedBatchSampling(
+        batch_size=batch_size, iterations=1
+    )
+    [(batch, is_padding)] = list(
+        _data_loading.batch_iterator(
+            dataset, strategy, rng=0, sharding=sharding
+        )
+    )
+    expected_idx = next(strategy.batch_iterator(6, rng=0))
+    self.assertEqual(batch.shape, (batch_size, 2))
+    self.assertEqual(batch.sharding, sharding)
+    self.assertEqual(is_padding.sharding, sharding)
+    np.testing.assert_allclose(batch, raw[expected_idx])
+    np.testing.assert_array_equal(is_padding, np.zeros(batch_size, dtype=bool))
+
 
 class DPTrainerTest(parameterized.TestCase):
   """Tests for the DPTrainer class."""
@@ -635,13 +663,16 @@ class DPTrainerTest(parameterized.TestCase):
     self.assertEqual(state.params.sharding.mesh, mesh)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
 
-  @parameterized.named_parameters(
-      ('array', lambda x: x),
-      ('grain', _as_map_dataset),
+  @parameterized.product(
+      to_dataset=(lambda x: x, _as_map_dataset),
+      layout=((1, 1, 2), (1, 2, 3), (2, 1, 2)),
   )
-  def test_fit_with_batch_axis_name(self, to_dataset):
+  def test_fit_with_batch_axis_name(self, to_dataset, layout):
     """fit() shards batches along batch_axis_name on an active mesh."""
-    devices = np.array(jax.devices()[:1]).reshape((1, 1))
+    num_replicas, num_model, microbatch_size = layout
+    devices = np.array(jax.devices()[: num_replicas * num_model]).reshape(
+        (num_replicas, num_model)
+    )
     mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
     param_sharding = jax.sharding.NamedSharding(
         mesh, jax.sharding.PartitionSpec('model')
@@ -667,14 +698,14 @@ class DPTrainerTest(parameterized.TestCase):
       )
       flags = execution_plan.PerformanceFlags(
           batch_axis_name='replica',
-          microbatch_size=2,
+          microbatch_size=microbatch_size,
+          param_specs=jax.sharding.PartitionSpec('model'),
       )
       trainer = training.DPTrainer(
           config=config,
           performance_flags=flags,
           loss_fn=loss_with_closed_over_base,
           optimizer=optax.sgd(0.01),
-          compilation_strategy=training.PadToMultiple(multiple=4),
       )
       state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
 

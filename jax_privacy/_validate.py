@@ -14,6 +14,7 @@
 
 """Centralized validation utilities for jax_privacy."""
 
+import math
 import zlib
 
 import jax
@@ -279,4 +280,34 @@ def explicit_mesh(
     raise ValueError(
         f'Requires a non-empty {axis_type} mesh. Please set the mesh using'
         ' jax.set_mesh().'
+    )
+
+
+def per_host_batch_sharding(sharding: jax.sharding.NamedSharding):
+  """Validates that each host owns a disjoint slice of the batch axis.
+
+  Expects a sharding for a single array whose first dimension is the batch axis.
+  Raises ValueError if batch shards do not divide evenly across hosts, which
+  typically happens when model parallelism is larger than a single host:
+
+  - Single host: always passes.
+  - Multi-host TPUs: fails when model parallelism exceeds chips per host
+    (e.g., >4-way with 4 chips/host, or >8-way with 8 chips/host).
+  - Multi-host GPUs: fails when model parallelism exceeds GPUs per host
+    (e.g., >1-way with 1 GPU/host, or >8-way with 8 GPUs/host).
+
+  Args:
+    sharding: NamedSharding for an array whose first dimension is the batch
+      axis.
+  """
+  if jax.process_count() == 1:
+    return
+  batch_axes = sharding.spec[0] if sharding.spec else None
+  axes = (batch_axes,) if isinstance(batch_axes, str) else (batch_axes or ())
+  num_batch_shards = math.prod(sharding.mesh.shape[a] for a in axes)
+  if num_batch_shards % jax.process_count() != 0:
+    raise ValueError(
+        f'Batch sharding {sharding.spec} has {num_batch_shards} shards across'
+        f' {jax.process_count()} hosts; each host must own a disjoint batch'
+        ' slice.'
     )

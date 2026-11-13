@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from unittest import mock
+
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
@@ -112,6 +114,28 @@ class ValidateTest(parameterized.TestCase):
       _validate.explicit_mesh(status=True, device_mesh=auto)
     with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
       _validate.explicit_mesh(status=False, device_mesh=explicit)
+
+  def test_per_host_batch_sharding(self):
+    mesh = jax.sharding.AbstractMesh((2, 2), ('replica', 'model'))
+    _validate.per_host_batch_sharding(
+        jax.sharding.NamedSharding(mesh, jax.P(None))
+    )
+    with mock.patch.object(jax, 'process_count', return_value=2):
+      _validate.per_host_batch_sharding(
+          jax.sharding.NamedSharding(mesh, jax.P('replica'))
+      )
+      _validate.per_host_batch_sharding(
+          jax.sharding.NamedSharding(mesh, jax.P(('replica', 'model')))
+      )
+      with self.assertRaisesRegex(ValueError, 'disjoint batch slice'):
+        _validate.per_host_batch_sharding(
+            jax.sharding.NamedSharding(mesh, jax.P(None))
+        )
+    with mock.patch.object(jax, 'process_count', return_value=4):
+      with self.assertRaisesRegex(ValueError, 'disjoint batch slice'):
+        _validate.per_host_batch_sharding(
+            jax.sharding.NamedSharding(mesh, jax.P('replica'))
+        )
 
 
 if __name__ == '__main__':

@@ -115,23 +115,22 @@ def _from_pygrain(
   def _get_element(idx: int) -> Any:
     return padding_element if idx == -1 else dataset[idx]
 
-  # Wrap process-local batch slices into a batch-sharded global jax.Array via
-  # safe_sharding first, then reshard to the caller's target sharding (which
-  # may replicate across some mesh axes).
-  def _to_device(x: np.ndarray) -> jax.Array:
+  if sharding is not None:
+    _validate.per_host_batch_sharding(sharding)
+
+  def _to_device(x: np.ndarray, n: int) -> jax.Array:
     if sharding is None:
       return jax.device_put(x)
-    safe_sharding = jax.sharding.NamedSharding(
-        sharding.mesh, jax.P(sharding.mesh.axis_names)
+    return jax.make_array_from_process_local_data(
+        sharding, x, global_shape=(n, *x.shape[1:])
     )
-    x = jax.make_array_from_process_local_data(safe_sharding, x)
-    return jax.device_put(x, sharding)
 
   with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
     for indices in itertools.islice(index_iterator, initial_step, None):
       indices = batch_selection.pad_to_multiple_of(
           indices, pad_to_multiple_of, microbatch_size=microbatch_size
       )
+      n = len(indices)
       # In multi-controller JAX, every process samples the same global indices
       # from the shared rng, then slices its disjoint 1 / process_count share so
       # each host only fetches and transforms its local records in parallel.
@@ -140,11 +139,11 @@ def _from_pygrain(
       elements = list(executor.map(_get_element, indices))
       # Prepend padding_element and slice [1:] to handle empty batches.
       batch = jax.tree.map(
-          lambda *leaves: _to_device(np.stack(leaves)[1:]),
+          lambda *leaves, n=n: _to_device(np.stack(leaves)[1:], n),
           padding_element,
           *elements,
       )
-      yield batch, _to_device(indices == -1)
+      yield batch, _to_device(indices == -1, n)
 
 
 def batch_iterator(
