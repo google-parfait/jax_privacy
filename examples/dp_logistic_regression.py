@@ -24,7 +24,6 @@ import jax.numpy as jnp
 from jax_privacy import auditing
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
-import numpy as np
 import optax
 
 USERS = 10_000
@@ -72,7 +71,7 @@ def create_benchmark(
 ) -> Tuple[Mapping[str, jax.Array], jax.Array, jax.Array]:
   """Creates a simple logistic regression model and training data."""
   key = jax.random.key(seed)
-  data_key, params_key = jax.random.split(key)
+  data_key, params_key, labels_key = jax.random.split(key, 3)
 
   params = {
       'weights': jax.random.normal(params_key, (features,)),
@@ -82,7 +81,7 @@ def create_benchmark(
   feature_matrix = jax.random.normal(data_key, (samples, features))
 
   logits = jnp.dot(feature_matrix, params['weights']) + params['bias']
-  labels = np.random.rand(samples) < jax.nn.sigmoid(logits)
+  labels = jax.random.bernoulli(labels_key, jax.nn.sigmoid(logits))
 
   return params, feature_matrix, labels  # pyrefly: ignore[bad-return]
 
