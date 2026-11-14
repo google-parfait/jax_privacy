@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import importlib
+import warnings
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -78,6 +79,16 @@ class BandedTest(parameterized.TestCase):
     np.testing.assert_array_equal(C, eye)
     self.assertEqual(C.dtype, jnp.float64)
     self.assertTrue(is_lower_triangular_banded(C, n))
+
+  def test_default_avoids_divide_by_zero_warning(self):
+    """Fichtenberger ratios skip k=0 so (2k-1)/(2k) is never -1/0."""
+    with warnings.catch_warnings():
+      warnings.simplefilter('error', RuntimeWarning)
+      C = banded.ColumnNormalizedBanded.default(8, 4)
+    # Unnormalized Algorithm-1 prefixes: 1, 1/2, 3/8, 5/16.
+    expected = np.array([1.0, 0.5, 0.375, 0.3125])
+    expected = expected / np.linalg.norm(expected)
+    np.testing.assert_allclose(np.asarray(C.params[0]), expected, atol=1e-6)
 
   def test_minsep_sensitivity_squared(self):
     C = banded.ColumnNormalizedBanded.default(32, bands=4)

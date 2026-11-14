@@ -110,9 +110,11 @@ class ColumnNormalizedBanded:
     Returns:
       A ColumnNormalizedBanded object.
     """
-    k = np.arange(bands)
-    ratios = (2 * k - 1) / (2 * k)
-    ratios[0] = 1
+    # Fichtenberger et al. Algorithm 1: ratios[0] = 1 and
+    # ratios[k] = (2k-1)/(2k) for k >= 1. Skip k=0 so we do not divide by zero.
+    k = np.arange(bands, dtype=np.float64)
+    ratios = np.ones(bands, dtype=np.float64)
+    np.divide(2 * k[1:] - 1, 2 * k[1:], out=ratios[1:])
     coefs = np.cumprod(ratios)
     return ColumnNormalizedBanded.from_banded_toeplitz(n, coefs)
 

@@ -81,6 +81,11 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **`ColumnNormalizedBanded.default`**: Compute Fichtenberger Algorithm 1
+    ratios without dividing by zero at ``k=0`` (previously ``ratios[0]``
+    was ``-inf`` then overwritten, emitting a ``RuntimeWarning`` on every
+    call).
+
 -   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
