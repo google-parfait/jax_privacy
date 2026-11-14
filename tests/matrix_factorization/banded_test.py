@@ -148,8 +148,20 @@ class BandedTest(parameterized.TestCase):
     A = streaming_matrix.prefix_sum()
     self.assertEqual(banded.per_query_error(C0, A, scan_fn=scan_fn).mean(), 5.0)
 
+  def test_checkpoint_count_caps_and_avoids_overflow(self):
+    """Checkpoint count is in [1, n] and large working sets do not overflow."""
+    self.assertEqual(banded._checkpoint_count(8, 4), 8)
+    self.assertEqual(banded._checkpoint_count(10_000, 32), 512)
+    # used = 64 * 10**7 exceeds the default 4 GiB budget (log2(0) overflowed).
+    self.assertEqual(banded._checkpoint_count(10_000_000, 64), 1)
+    # Constructing the wrappers must not raise.
+    if importlib.util.find_spec('equinox') is not None:
+      banded._equinox_scan_fn(10_000_000, 64)
+    if importlib.util.find_spec('dinosaur') is not None:
+      banded._dinosaur_scan_fn(10_000_000, 64)
+
   @parameterized.named_parameters(
-      # ('equinox', 'equinox'),  # TODO: b/377404877 - Broken at head.
+      ('equinox', 'equinox'),
       ('dinosaur', 'dinosaur'),
       ('default', jax.lax.scan),
   )

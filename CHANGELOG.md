@@ -81,6 +81,13 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **Banded checkpointed scans**: Cap Equinox/Dinosaur scan checkpoints at
+    ``n`` and return 1 when the working set exceeds the memory budget, so
+    ``scan_fn='equinox'`` / ``'dinosaur'`` no longer overflow ``log2(0)``
+    for large ``n`` (e.g. ``n=10**7``, ``bands=64``) and no longer request
+    millions of checkpoints for small ``n``. Re-enabled the Equinox
+    ``test_optimize_improves_init`` case.
+
 -   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
