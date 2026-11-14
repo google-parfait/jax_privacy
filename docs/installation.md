@@ -42,8 +42,9 @@ pip install git+https://github.com/google-parfait/jax_privacy
 
 ## Alternative: Install from PyPI
 
-You can also install JAX Privacy from PyPI (version 1.0 or 2.0), but note
-that these releases will not have all the features available on GitHub head.
+You can also install JAX Privacy from PyPI (the latest packaged release is
+2.4.0), but note that packaged releases will not have all the features
+available on GitHub head.
 
 ```bash
 pip install jax-privacy

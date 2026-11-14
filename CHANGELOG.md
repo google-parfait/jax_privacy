@@ -81,6 +81,11 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **Citation and install docs**: `CITATION.cff` now reports version 2.4.0
+    (released 2026-11-06) instead of 1.1.0, matching `pyproject.toml` and
+    the README software citation. Installation docs no longer describe PyPI
+    as "version 1.0 or 2.0".
+
 -   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
