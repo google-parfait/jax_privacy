@@ -132,6 +132,23 @@ def _find_adaptive_state(state: optax.OptState) -> optax.Updates:
   )
 
 
+def _preconditioner_scale(
+    second_moment: jax.Array,
+    eps: float,
+    eps_root: float,
+) -> jax.Array:
+  """Adam-style coordinate scale ``1 / (sqrt(v + eps_root) + eps)``."""
+  # Compute in at least float32 so the default eps=1e-8 does not underflow in
+  # float16. A zero denominator (v = 0 and a vanishing eps) is floored so the
+  # scale is large and finite instead of inf, which would turn a zero gradient
+  # into NaN (0 * inf).
+  compute_dtype = jnp.promote_types(second_moment.dtype, jnp.float32)
+  v = jnp.astype(second_moment, compute_dtype)
+  denom = jnp.sqrt(v + eps_root) + eps
+  denom = jnp.maximum(denom, jnp.finfo(compute_dtype).tiny)
+  return jnp.reciprocal(denom)
+
+
 def scale_then_privatize(
     base_optimizer: optax.GradientTransformation,
     eps: float = 1e-8,
@@ -173,7 +190,8 @@ def scale_then_privatize(
       parameter in Adam. This also acts as a stability constant to prevent
       excessively large scaling in coordinates where :math:`v` is very small.
       Corresponds to :math:`\varepsilon_{s_1}` in Algorithm 8 of the paper. See
-      the note above on tuning this parameter.
+      the note above on tuning this parameter. The scale is computed in at
+      least float32 so this default remains representable in float16.
     eps_root: A small constant added to :math:`v` inside the square root,
       analogous to ``eps_root`` in :func:`optax.scale_by_adam`. See the note
       above on tuning this parameter.
@@ -194,11 +212,16 @@ def scale_then_privatize(
     # Compute the scaling vector: s = 1 / (sqrt(ν + eps_root) + eps).
     # It is the same formula used in Adam for per-coordinate learning rates.
     nu = extract_preconditioner_from_state_fn(state)
-    # TODO: b/415360727 - Investigate+improve numerical stability when v = 0.
-    scaling = jax.tree.map(lambda v: 1.0 / (jnp.sqrt(v + eps_root) + eps), nu)
+    scaling = jax.tree.map(
+        lambda v: _preconditioner_scale(v, eps, eps_root), nu
+    )
     scale_fn = jnp.divide if inverse else jnp.multiply
+    # Multiply/divide in the scale dtype (at least float32) so float16
+    # gradients do not overflow before the result is cast back.
     return lambda updates: jax.tree.map(
-        lambda u, s: jnp.astype(scale_fn(u, s), u.dtype), updates, scaling
+        lambda u, s: jnp.astype(scale_fn(jnp.astype(u, s.dtype), s), u.dtype),
+        updates,
+        scaling,
     )
 
   def update(updates, state, params, **extra_args):
