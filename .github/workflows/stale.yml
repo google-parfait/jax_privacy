@@ -32,10 +32,11 @@ jobs:
           days-before-stale: -1
           days-before-close: -1
 
-          # Enable for PRs
-          days-before-pr-stale: 7
+          # Enable for PRs (exempt PRs already approved or awaiting internal merge)
+          days-before-pr-stale: 21
           days-before-pr-close: 30
+          exempt-pr-labels: 'approved,awaiting-google-merge,keep-open'
 
           # Messages
-          stale-pr-message: 'This PR has been idle for 7 days. Please provide an update or review.'
-          close-pr-message: 'This PR has been idle for an additional 30 days since being marked as stale. Closing this PR.'
+          stale-pr-message: 'This PR has been idle for 21 days. Please post a comment if it is still active or awaiting review.'
+          close-pr-message: 'This PR has been idle for an additional 30 days since being marked as stale. Closing this PR; feel free to comment to reopen.'
