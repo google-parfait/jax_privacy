@@ -306,6 +306,47 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     n2, _ = p_seed.update(params, p_seed.init(params))
     chex.assert_trees_all_equal(n1, n2)
 
+  @parameterized.named_parameters(
+      ('dense', np.eye(_ITERATIONS) + 0.1),
+      ('streaming_identity', streaming_matrix.identity()),
+      ('streaming_prefix', streaming_matrix.prefix_sum()),
+  )
+  def test_jit_update_with_default_rng(self, noising_matrix):
+    def make_privatizer(rng=None):
+      return noise_addition.matrix_factorization_privatizer(
+          noising_matrix, stddev=_STDDEV, rng=rng
+      )
+
+    grads = jnp.zeros(8)
+    p_ref = make_privatizer(_SEED)
+    s_ref = s_jit = p_ref.init(grads)
+    ref_fn = jax.jit(p_ref.update)
+    step_fn = jax.jit(lambda g, s: make_privatizer().update(g, s))
+    for _ in range(_ITERATIONS):
+      n_ref, s_ref = ref_fn(grads, s_ref)
+      n_jit, s_jit = step_fn(grads, s_jit)
+      chex.assert_trees_all_equal(n_ref, n_jit)
+
+  @parameterized.named_parameters(
+      ('dense', np.eye(_ITERATIONS) + 0.1),
+      ('streaming_identity', streaming_matrix.identity()),
+      ('streaming_prefix', streaming_matrix.prefix_sum()),
+  )
+  def test_jit_init_requires_int_rng(self, noising_matrix):
+    def make_privatizer(rng=None):
+      return noise_addition.matrix_factorization_privatizer(
+          noising_matrix, stddev=_STDDEV, rng=rng
+      )
+
+    grads = jnp.zeros(8)
+    state = jax.jit(lambda g: make_privatizer(_SEED).init(g))(grads)
+    self.assertIsNotNone(state)
+    with self.assertRaises(RuntimeError):
+      jax.jit(lambda g: make_privatizer().init(g))(grads)
+    rng = np.random.default_rng(0)
+    with self.assertRaises(RuntimeError):
+      jax.jit(lambda g: make_privatizer(rng).init(g))(grads)
+
 
 if __name__ == '__main__':
   jax.config.update('jax_enable_x64', True)

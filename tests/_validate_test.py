@@ -94,6 +94,8 @@ class ValidateTest(parameterized.TestCase):
       _validate.same_shape(x=jax.numpy.zeros((2, 3)), y=jax.numpy.zeros((2, 2)))
 
   def test_jitted(self):
+    self.assertFalse(_validate.is_jitted())
+    self.assertTrue(jax.jit(_validate.is_jitted)())
     _validate.jitted(False)
     with self.assertRaisesRegex(RuntimeError, 'within a jitted context'):
       _validate.jitted(True)

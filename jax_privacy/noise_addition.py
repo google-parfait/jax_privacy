@@ -175,6 +175,10 @@ def matrix_factorization_privatizer(
   rng = _random.resolve_rng(rng, prng_key=prng_key)
   if isinstance(rng, (int, np.integer)):
     seed = int(rng)
+  elif rng is None and _validate.is_jitted():
+    # Allow constructing a privatizer inside jit with rng=None when only update
+    # is called; init will raise if invoked without an integer seed.
+    seed = None
   else:
     _validate.jitted(False)
     seed = int(_random.default_rng(rng).integers(2**31))
@@ -201,6 +205,13 @@ gaussian_privatizer = functools.partial(
 gaussian_privatizer.__doc__ = (
     """Constructs a gradient privatizer that adds isotropic Gaussian noise."""
 )
+
+
+def _key_from_seed(seed: int | None) -> jax.Array:
+  """Materializes a JAX PRNG key from a resolved seed inside init."""
+  if seed is None:
+    raise RuntimeError('privatizer.init requires an int rng inside jit.')
+  return jax.random.key(seed)
 
 
 def _compute_loop_bounds(matrix_row):
@@ -239,7 +250,7 @@ def _dense_matrix_factorization_privatizer(
     noising_matrix: jax.typing.ArrayLike,
     *,
     stddev: float,
-    seed: int,
+    seed: int | None,
     strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
@@ -250,20 +261,20 @@ def _dense_matrix_factorization_privatizer(
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
-    index = noise_state
+    prng_key, index = noise_state
     matrix_row = noising_matrix[index] * stddev
 
     target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
     noise = optax.tree.random_like(
-        rng_key=jax.random.key(seed),
+        rng_key=prng_key,
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
         dtype=dtype,
     )
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
-    return noisy_grads, index + 1
+    return noisy_grads, (prng_key, index + 1)
 
-  init = lambda _: jnp.array(0, dtype=jnp.int32)
+  init = lambda _: (_key_from_seed(seed), jnp.array(0, dtype=jnp.int32))
   return optax.GradientTransformation(init, update)
 
 
@@ -281,7 +292,7 @@ def _streaming_matrix_factorization_privatizer(
     noising_matrix: streaming_matrix.StreamingMatrix,
     *,
     stddev: float,
-    seed: int,
+    seed: int | None,
     strategy: _IntermediateShardingStrategy,
     dtype: jax.typing.DTypeLike | None = None,
 ) -> optax.GradientTransformation:
@@ -297,7 +308,7 @@ def _streaming_matrix_factorization_privatizer(
     # Materialize the key inside init so integer seeds are not closed over as
     # outer jax.Arrays and donated state buffers always start from a fresh copy.
     state = noising_matrix.init_multiply(intermediate)
-    return jax.random.key(seed), state
+    return _key_from_seed(seed), state
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.

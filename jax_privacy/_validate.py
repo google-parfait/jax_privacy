@@ -256,9 +256,14 @@ def discrete_clipping(
   x64_enabled()
 
 
+def is_jitted() -> bool:
+  """Returns whether execution is inside a jitted context."""
+  return isinstance(jnp.array(0), jax.core.Tracer)
+
+
 def jitted(status: bool = False):
   """Validates whether execution is inside a jitted context."""
-  if isinstance(jnp.array(0), jax.core.Tracer) != status:
+  if is_jitted() != status:
     expected = 'within' if status else 'outside'
     raise RuntimeError(
         f'This function must be used {expected} a jitted context.'
