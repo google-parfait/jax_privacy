@@ -110,7 +110,7 @@ class PerformanceFlags:
     dtype: The dtype to use for noise generation and gradient aggregation.
     noise_seed: Deprecated; pass ``rng`` to
       :meth:`~jax_privacy.execution_plan.ExecutionPlanConfig.make` or
-      ``noise_seed`` to :class:`~jax_privacy.training.DPTrainer` instead.
+      :meth:`~jax_privacy.training.DPTrainer.init` instead.
     intermediate_strategy: Strategy for generating intermediate noise, controls
       sharding behavior for noise addition.
     microbatch_size: If set, per-example gradient computation is broken into
@@ -127,7 +127,7 @@ class PerformanceFlags:
   """
 
   dtype: jax.typing.DTypeLike = np.float32
-  # Deprecated; pass rng to config.make() or noise_seed to DPTrainer instead.
+  # Deprecated; pass rng to config.make() or DPTrainer.init() instead.
   noise_seed: int | None = None
   intermediate_strategy: noise_addition.ShardingStrategies = (
       noise_addition.ShardingStrategies.DEFAULT

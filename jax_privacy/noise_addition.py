@@ -250,20 +250,20 @@ def _dense_matrix_factorization_privatizer(
 
   def update(sum_of_clipped_grads, noise_state, params=None):
     del params  # Unused, but expected by optax.GradientTransformation API.
-    index = noise_state
+    prng_key, index = noise_state
     matrix_row = noising_matrix[index] * stddev
 
     target = jax.tree.map(strategy.get_noise_structure, sum_of_clipped_grads)
     noise = optax.tree.random_like(
-        rng_key=jax.random.key(seed),
+        rng_key=prng_key,
         target_tree=target,
         sampler=functools.partial(_gaussian_linear_combination, matrix_row),
         dtype=dtype,
     )
     noisy_grads = jax.tree.map(strategy.add, sum_of_clipped_grads, noise)
-    return noisy_grads, index + 1
+    return noisy_grads, (prng_key, index + 1)
 
-  init = lambda _: jnp.array(0, dtype=jnp.int32)
+  init = lambda _: (jax.random.key(seed), jnp.array(0, dtype=jnp.int32))
   return optax.GradientTransformation(init, update)
 
 

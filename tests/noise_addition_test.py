@@ -306,6 +306,16 @@ class PrivatizerTest(chex.TestCase, parameterized.TestCase):
     n2, _ = p_seed.update(params, p_seed.init(params))
     chex.assert_trees_all_equal(n1, n2)
 
+  @parameterized.parameters(*_PRIVATIZER_FNS)
+  def test_update_is_seed_free(self, privatizer_fn):
+    grads = jnp.zeros(8)
+    p1, p2 = privatizer_fn(rng=42), privatizer_fn(rng=0)
+    s1 = s2 = p1.init(grads)
+    for _ in range(_ITERATIONS):
+      n1, s1 = p1.update(grads, s1)
+      n2, s2 = p2.update(grads, s2)
+      chex.assert_trees_all_equal(n1, n2)
+
 
 if __name__ == '__main__':
   jax.config.update('jax_enable_x64', True)

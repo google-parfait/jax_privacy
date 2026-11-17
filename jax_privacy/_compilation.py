@@ -144,15 +144,14 @@ def _dry_run_state(
     dataset: training.Dataset,
     state: training.TrainingState,
     padding_example: Any = None,
-) -> tuple[int, training.TrainingState, jax.ShapeDtypeStruct]:
-  """Eval-shape setup for abstract training state and PRNGKey."""
+) -> tuple[int, training.TrainingState]:
+  """Eval-shape setup for abstract training state."""
   if _data_loading.is_map_dataset(dataset):
     n = len(dataset)
   else:
     n = _validate.batched(dataset, padding_example)
   state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
-  key = jax.ShapeDtypeStruct.like(jax.random.key(0))
-  return n, state, key
+  return n, state
 
 
 def _max_padded_batch_size(
@@ -202,7 +201,7 @@ def precompile(
 
   # Copy rng so simulating batch sizes does not advance the caller's generator.
   rng = copy.deepcopy(rng)
-  n, state, key = _dry_run_state(dataset, state, trainer.padding_example)
+  n, state = _dry_run_state(dataset, state, trainer.padding_example)
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
   microbatch_size = trainer.performance_flags.microbatch_size
@@ -227,7 +226,7 @@ def precompile(
 
       # The compilation cache leaks the compiled batch size(s), which depend on
       # the sampled batches -- a technical DP violation if it is part of output.
-      lowered = trainer.train_step.lower(trainer, state, batch, pad, key)
+      lowered = trainer.train_step.lower(trainer, state, batch, pad)
       logging.info("AOT-compiling train_step for batch size %d", batch_size)
       # We asyncronously ahead-of-time (AOT) compile the lowered function in a
       # background thread to avoid blocking the training loop. Currently, the
@@ -243,14 +242,13 @@ def _compile_and_peak(
     state: training.TrainingState,
     batch: training.Batch,
     is_padding_example: jax.Array,
-    prng_key: jax.Array,
 ) -> tuple[jax.stages.Compiled | None, float]:
   """Compiles the step; returns (compiled, peak_bytes) or (None, inf)."""
   try:
     # Hoist constants so the measured peak matches the (hoisted) training run.
     with hoist_closed_over_constants():
       compiled = trainer.train_step.lower(
-          trainer, state, batch, is_padding_example, prng_key
+          trainer, state, batch, is_padding_example
       ).compile()
   except jax.errors.JaxRuntimeError:
     return None, float("inf")
@@ -310,7 +308,7 @@ def _autotune(
   budget = limit * hbm_safety_fraction if limit is not None else None
 
   rng = copy.deepcopy(rng)
-  n, state, key = _dry_run_state(dataset, state, trainer.padding_example)
+  n, state = _dry_run_state(dataset, state, trainer.padding_example)
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
   max_batch = max(idx.size for idx in batch_strategy.batch_iterator(n, rng=rng))
@@ -334,7 +332,7 @@ def _autotune(
     batch, padding = _abstract_batch_and_padding(
         dataset, pad, sharding, trainer.padding_example
     )
-    compiled, peak = _compile_and_peak(resolved, state, batch, padding, key)
+    compiled, peak = _compile_and_peak(resolved, state, batch, padding)
     fits = compiled is not None and (budget is None or peak <= budget)
     return _Candidate(
         trainer=resolved, pad=pad, compiled=compiled, peak=peak, fits=fits
