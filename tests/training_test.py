@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import concurrent.futures
 import dataclasses
 from unittest import mock
 from absl.testing import absltest
@@ -285,6 +286,7 @@ class BatchIteratorTest(parameterized.TestCase):
           )
       )
 
+  # Tests both in-memory array PyTrees and PyGrain MapDatasets.
   @parameterized.product(
       to_dataset=(lambda x: x, _as_map_dataset),
       layout=((1, 2, 3), (2, 1, 4)),
@@ -312,6 +314,60 @@ class BatchIteratorTest(parameterized.TestCase):
     self.assertEqual(is_padding.sharding, sharding)
     np.testing.assert_allclose(batch, raw[expected_idx])
     np.testing.assert_array_equal(is_padding, np.zeros(batch_size, dtype=bool))
+
+  @parameterized.named_parameters(
+      ('unsharded', None, None, None),
+      ('replicated', 1, 2, jax.P(None)),
+      ('model_parallel', 1, 2, jax.P('replica')),
+      ('data_parallel', 2, 1, jax.P('replica')),
+  )
+  def test_read_batch_formal_guarantees(self, num_replicas, num_model, spec):
+    sharding = None
+    if spec is not None:
+      devices = np.array(jax.devices()).reshape((num_replicas, num_model))
+      mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+      sharding = jax.sharding.NamedSharding(mesh, spec)
+
+    raw = {
+        'x': np.arange(30, dtype=np.float32).reshape((5, 2, 3)) + 1.0,
+        'y': np.arange(5, dtype=np.int32) + 10,
+    }
+    pad = {'x': np.zeros((2, 3), np.float32), 'y': np.int32(0)}
+    calls = []
+
+    def get_element(idx: int):
+      calls.append(int(idx))
+      return pad if idx == -1 else {'x': raw['x'][idx], 'y': raw['y'][idx]}
+
+    rng = np.random.default_rng(0)
+    index_batches = [
+        np.array([], dtype=np.int32),
+        np.array([-1, -1, -1, -1]),
+        np.array([2, 0, 2, 4]),
+        rng.choice([-1, 0, 1, 2, 3, 4], size=6),
+        rng.choice([-1, 0, 1, 2, 3, 4], size=12),
+    ]
+    executor = self.enterContext(concurrent.futures.ThreadPoolExecutor(2))
+    for indices in index_batches:
+      calls.clear()
+      batch, is_pad = _data_loading._read_batch(
+          indices, get_element, sharding, executor
+      )
+      mask = indices == -1
+
+      # Guarantee 1: exact shapes, dtypes, per-position values, and sharding.
+      expected_x = np.where(mask[:, None, None], pad['x'], raw['x'][indices])
+      expected_y = np.where(mask, pad['y'], raw['y'][indices])
+      np.testing.assert_array_equal(batch['x'], expected_x, strict=True)
+      np.testing.assert_array_equal(batch['y'], expected_y, strict=True)
+      np.testing.assert_array_equal(is_pad, mask, strict=True)
+      if sharding is not None:
+        self.assertEqual(batch['x'].sharding, sharding)
+        self.assertEqual(batch['y'].sharding, sharding)
+        self.assertEqual(is_pad.sharding, sharding)
+
+      # Guarantee 2: 1 template read (-1) + 1 read per batch position.
+      self.assertCountEqual(calls, [-1, *indices.tolist()])
 
 
 class DPTrainerTest(parameterized.TestCase):
