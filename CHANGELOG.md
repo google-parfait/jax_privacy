@@ -20,6 +20,8 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-11-17
+
 ### Added
 
 -   **[`DPTrainer`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
@@ -28,11 +30,37 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     `microbatch_size` tuning to maximize throughput and optimize device memory
     during DP-SGD training, while minimizing compilation overhead and manual
     tuning of performance knobs.
+-   **PyGrain `MapDataset` support in `DPTrainer`**: Added zero-dependency
+    duck-typed support for PyGrain `MapDataset` inputs in `DPTrainer`,
+    including host-sharded distributed batch loading via
+    `jax.make_array_from_callback`.
+-   **Mixed-precision training in `DPTrainer`**: Added mixed-precision training
+    support via `PerformanceFlags.dtype`, keeping persistent weights, optimizer
+    state, and noise state in `dtype` (`float32` by default) while running
+    forward and backward passes in the model's parameter dtypes (such as
+    `bfloat16`).
+-   **Unified `rng` randomness API**: Standardized randomness configuration
+    across `DPTrainer.init`, `ExecutionPlanConfig.make`, `noise_addition`,
+    `training.audit`, and `keras_api` around
+    `rng: np.random.Generator | int | None = None`, drawing a cryptographically
+    secure OS seed and broadcasting it across multi-host meshes when `rng=None`.
+-   **Top-level public exports**: Re-exported `DPTrainer`, `BandMFConfig`, and
+    `PerformanceFlags` directly from top-level `jax_privacy`.
+-   **Compiler-based sharding support for zero-redundancy DP-MF**: Added
+    `PerformanceFlags.param_specs` and `sharding_utils.with_sharding_specs` to
+    support zero-redundancy matrix factorization noise state sharding with
+    compiler-sharded models.
 -   **[Monte Carlo (MC) accounting](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.accounting.html)**:
-    Added cyclic Poisson sampling (with independent partitions) to the MC
-    accounting library, and added support for hybrid mechanism calibration
-    composing events analyzed via MC accounting with events analyzed via
-    Privacy Loss Distributions (PLD).
+    -   Added cyclic Poisson sampling (with independent partitions) to the MC
+        accounting library, and added support for hybrid mechanism calibration
+        composing events analyzed via MC accounting with events analyzed via
+        Privacy Loss Distributions (PLD).
+    -   Added importance sampling, balls-in-bins and `MinSepRandomAllocation`
+        sampling and loss bounds, analytic upper bounds, sample-size
+        accounting, `PrivacyLossSamples` / `merge_privacy_loss_samples`, and
+        pure-JAX partition simulation and scoring based on
+        [Dong and Ganesh (2026)](https://arxiv.org/abs/2602.09338) and
+        [McKenna and Ganesh (2026)](https://arxiv.org/abs/2610.12712).
 -   **Slack-based adaptive clipping**: Added optional `slack` argument to
     [`clipped_fun`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.clipping.html)
     and
@@ -41,6 +69,17 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     enabling downstream adaptive clipping-bound controllers. This is a building
     block for the [SLAClip](https://icml.cc/virtual/2026/poster/66390)
     approach. ([#343](https://github.com/google-parfait/jax_privacy/pull/343))
+-   **Canary auditing utilities**:
+    -   **[`CanaryScoreAuditor.bootstrap`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.auditing.html)**:
+        Added a public method to compute bootstrapped quantiles of any scalar
+        auditing metric, e.g.
+        `auditor.bootstrap(CanaryScoreAuditor.attack_auroc, params)`, replacing
+        the per-method `bootstrap_params` keyword argument, along with
+        `CanaryScoreAuditor.num_canaries`.
+    -   **`jax_privacy.training.audit`**: Added a microbatched helper for
+        scoring held-in and held-out canaries and constructing a
+        `CanaryScoreAuditor`, plus dataset-size validation in `DPTrainer.fit`
+        when `num_examples` is configured.
 -   **Documentation improvements**:
     -   **API documentation rendering**: Greatly improved documentation across
         `.md`, `.rst`, and `.py` files for better rendering of math, code, and
@@ -52,10 +91,11 @@ The format is based on https://keepachangelog.com/en/1.1.0/
         architecture, and explaining how the design of `jax_privacy` prevents
         or mitigates them.
         ([#362](https://github.com/google-parfait/jax_privacy/pull/362))
-    -   **Batch selection**: Added the
+    -   **Batch selection and library history**: Added the
         [Batch Selection Strategies guide](https://jax-privacy.readthedocs.io/en/latest/batch_selection.html)
-        documenting supported batch selection strategies and their privacy
-        accounting implications.
+        and the
+        [History of JAX Privacy](https://jax-privacy.readthedocs.io/en/latest/history.html)
+        page, along with a scope and design philosophy overview in `README.md`.
     -   **Contributor documentation guide**: Updated `CONTRIBUTING.md` and added
         a dedicated
         [Documentation Guide](https://jax-privacy.readthedocs.io/en/latest/contribution_guide.html#documentation-guide)
@@ -64,15 +104,34 @@ The format is based on https://keepachangelog.com/en/1.1.0/
         preview workflows.
     -   **Sphinx intersphinx mappings**: Added cross-reference mappings for
         `jax` and `optax` for native cross-references in Sphinx documentation.
--   **[`CanaryScoreAuditor.bootstrap`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.auditing.html)**:
-    Added a public method to compute bootstrapped quantiles of any scalar
-    auditing metric, e.g.
-    `auditor.bootstrap(CanaryScoreAuditor.attack_auroc, params)`, replacing the
-    per-method `bootstrap_params` keyword argument. The quantiles are returned
-    as a tuple of Python floats.
+
+### Changed
+
+-   **Python `>=3.12` and PyPI dependency bounds**: Bumped the minimum
+    supported Python version from `3.11` to `3.12`, and switched
+    `pyproject.toml` dependencies to published PyPI bounds
+    (`dp-accounting>=0.7.0` and `optax>=0.2.9`).
+-   **GitHub repository location**: Moved the repository from
+    `google-deepmind/jax_privacy` to
+    [`google-parfait/jax_privacy`](https://github.com/google-parfait/jax_privacy).
+-   **Default `PadToMultiple` padding**: `PadToMultiple` now defaults to
+    padding up to the maximum batch size rounded up to a multiple of
+    `microbatch_size` (with `clipped_grad` early-stopping on trailing
+    all-padding microbatches).
+
+### Deprecated
+
+-   **Legacy RNG arguments on Tier 2 and Tier 3 APIs**: Deprecated `noise_seed`
+    on `ExecutionPlanConfig.make` and `PerformanceFlags`, and `prng_key` on
+    `noise_addition` privatizers, `DPKerasConfig`, and `training.audit`, in
+    favor of `rng` (scheduled for removal in `2.6`).
 
 ### Removed
 
+-   **`DPTrainer` per-call RNG arguments**: Consolidated `DPTrainer` randomness
+    into `DPTrainer.init(params, *, rng=None)` and `TrainingState`, removing
+    `DPTrainer.noise_seed`, `DPTrainer.fit(..., rng_or_seed=...)`, and
+    `DPTrainer.train_step(..., prng_key=...)`.
 -   **`bootstrap_params` keyword argument** of
     `CanaryScoreAuditor.epsilon_raw_counts`, `tpr_at_given_fpr`, and
     `attack_auroc`: Use `CanaryScoreAuditor.bootstrap` instead, e.g.
@@ -81,6 +140,17 @@ The format is based on https://keepachangelog.com/en/1.1.0/
 
 ### Fixed
 
+-   **Low-precision gradient norm overflow and underflow**: Computed
+    per-example L2 norms in `clip_pytree` and `clipped_grad` via
+    `optax.tree.cast(..., float)` to prevent `float16` and `bfloat16` overflow
+    and underflow while preserving `float64` precision when `jax_enable_x64` is
+    enabled.
+-   **Padding masking in `clipped_fun` and `clipped_grad`**: Masked
+    floating-point leaves of per-example auxiliary outputs and gradient norms
+    with `NaN` at `is_padding_example` positions so downstream aggregations
+    (such as `jnp.nanmean`) are not biased by synthetic padding examples.
+-   **Multi-host TPU precompilation in `DPTrainer.fit`**: Fixed multi-host TPU
+    precompilation and batch iteration synchronization in `DPTrainer.fit`.
 -   **[`DPTrainer.fit`](https://jax-privacy.readthedocs.io/en/latest/_autosummary_output/jax_privacy.training.html)
     preemption resume**: Fixed an issue where resuming from preemption did not
     advance the `batch_iterator` to match the restored `TrainingState`,
@@ -90,9 +160,15 @@ The format is based on https://keepachangelog.com/en/1.1.0/
     always `1.0` / `l2_clip_norm` with guidance to use `.sensitivity()` /
     `.l2_norm_bound`, matching `clipped_grad`. The old text ignored
     `normalize_by` and per-layer clipping. Added contract tests.
+-   **Monte Carlo accounting numerical precision**: Fixed boundary-mode norms
+    and numerical precision in Monte Carlo privacy loss estimation.
 
 ### Internal / Cleanups
 
+-   **Centralized `_random` module and expanded `_validate` checks**:
+    Consolidated RNG seeding, host broadcasting, and `parallel_sample_pytree`
+    into `_random.py`, and expanded adjective-style validators in
+    `_validate.py`.
 -   **Dependency management with `uv` and `pylock.toml`**: Migrated lockfile
     and development workflow to PEP 751 `pylock.toml` using `uv`, enforced via
     GitHub Actions.
@@ -283,7 +359,8 @@ and expanded support for matrix factorization mechanisms.
 
 <!-- disableFinding(LINK_UNUSED_ID) -->
 
-[unreleased]: https://github.com/google-parfait/jax_privacy/compare/v2.2.0...HEAD.
+[unreleased]: https://github.com/google-parfait/jax_privacy/compare/v2.5.0...HEAD
+[2.5.0]: https://github.com/google-parfait/jax_privacy/compare/v2.2.0...v2.5.0
 [2.2.0]: https://github.com/google-parfait/jax_privacy/compare/v2.0.0...v2.2.0.
 [2.0.0]: https://github.com/google-parfait/jax_privacy/compare/v1.0.0...v2.0.0.
 
