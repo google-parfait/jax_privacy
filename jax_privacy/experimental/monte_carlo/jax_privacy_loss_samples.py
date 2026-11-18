@@ -77,8 +77,14 @@ def _accumulate_bincounts(
   # so no length-num_samples buffer is materialized and peak memory is
   # O(num_bins + microbatch_size).
 
+  # Uses an Auto-axis mesh directly without set_mesh; assumes no Explicit mesh
+  # is active, as offline accounting runs outside model training meshes.
+  mesh = jax.sharding.Mesh(jax.devices(), ('devices',))
+  sharding = jax.NamedSharding(mesh, jax.P('devices'))
+
   def block(start):
     indices = start + jnp.arange(microbatch_size, dtype=jnp.uint32)
+    indices = jax.lax.with_sharding_constraint(indices, sharding)
     bins = jax.vmap(per_sample)(indices)
     return jax.tree.map(lambda b: jnp.bincount(b, length=num_bins), bins)
 
@@ -172,8 +178,9 @@ def privacy_loss_samples(
     key: JAX PRNG key.
     num_samples: Minimum number of samples per direction; rounded up to a whole
       multiple of ``microbatch_size``.
-    microbatch_size: Samples processed per batch (larger values run faster but
-      use more device memory); defaults to ``num_samples``.
+    microbatch_size: Samples processed across devices per batch, rounded up to a
+      multiple of :func:`jax.device_count` (larger values run faster but use
+      more device memory); defaults to ``num_samples``.
     grid_lo: Lowest grid point.
     grid_hi: Highest finite grid point.
     grid_size: Number of finite grid points spanning ``[grid_lo, grid_hi]``.
@@ -190,7 +197,9 @@ def privacy_loss_samples(
       microbatch_size=microbatch_size,
       grid_size=grid_size,
   )
+  num_devices = jax.device_count()
   microbatch_size = min(microbatch_size, num_samples)
+  microbatch_size = math.ceil(microbatch_size / num_devices) * num_devices
   # Round up so every microbatch is full; treats num_samples as a minimum.
   num_samples = math.ceil(num_samples / microbatch_size) * microbatch_size
 
