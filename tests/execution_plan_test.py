@@ -131,10 +131,10 @@ class ExecutionPlanTest(parameterized.TestCase):
         dtype=np.float64,
         microbatch_size=4,
     )
-    plan = config.make(flags, noise_seed=42)
+    plan = config.make(flags, rng=42)
     self.assertIsInstance(plan, execution_plan.DPExecutionPlan)
 
-  def test_make_noise_seed_takes_precedence(self):
+  def test_make_rng_takes_precedence(self):
     config = BandMFConfig.default(
         num_bands=2,
         iterations=4,
@@ -152,16 +152,28 @@ class ExecutionPlanTest(parameterized.TestCase):
       flags = execution_plan.PerformanceFlags(noise_seed=7)
     np.testing.assert_allclose(
         first_step_noise(config.make(flags)),
-        first_step_noise(config.make(noise_seed=7)),
+        first_step_noise(config.make(rng=7)),
     )
     np.testing.assert_allclose(
-        first_step_noise(config.make(flags, noise_seed=42)),
-        first_step_noise(config.make(noise_seed=42)),
+        first_step_noise(config.make(flags, rng=42)),
+        first_step_noise(config.make(rng=42)),
+    )
+    np.testing.assert_allclose(
+        first_step_noise(config.make(rng=np.random.default_rng(42))),
+        first_step_noise(config.make(rng=np.random.default_rng(42))),
+    )
+    with self.assertLogs(level="WARNING"):
+      deprecated_noise = first_step_noise(config.make(flags, noise_seed=42))
+      execution_plan.NonPrivateConfig(iterations=1, batch_size=1).make(
+          noise_seed=42
+      )
+    np.testing.assert_allclose(
+        deprecated_noise, first_step_noise(config.make(rng=42))
     )
     self.assertFalse(
         np.allclose(
-            first_step_noise(config.make(flags, noise_seed=42)),
-            first_step_noise(config.make(noise_seed=7)),
+            first_step_noise(config.make(flags, rng=42)),
+            first_step_noise(config.make(rng=7)),
         )
     )
 

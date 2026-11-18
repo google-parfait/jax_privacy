@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import concurrent.futures
 import dataclasses
 from unittest import mock
 from absl.testing import absltest
@@ -62,8 +63,8 @@ class _FixedPlanConfig:
 
   plan: execution_plan.DPExecutionPlan
 
-  def make(self, performance_flags=None, noise_seed=None):
-    del performance_flags, noise_seed  # The plan is already built.
+  def make(self, performance_flags=None, rng=None, *, noise_seed=None):
+    del performance_flags, rng, noise_seed  # The plan is already built.
     return self.plan
 
 
@@ -91,7 +92,10 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=2)
     batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertLen(batches, 2)
@@ -112,7 +116,10 @@ class BatchIteratorTest(parameterized.TestCase):
 
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertEqual(batch.shape, (0, 2))
@@ -128,7 +135,10 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=1)
     [(batch, is_padding)] = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=0, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(0),
+            pad_to_multiple_of=4,
         )
     )
     self.assertEqual(batch['x'].shape, (4, 3))
@@ -144,12 +154,19 @@ class BatchIteratorTest(parameterized.TestCase):
     strategy = batch_selection.FixedBatchSampling(batch_size=3, iterations=5)
     all_batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=42, pad_to_multiple_of=4
+            dataset,
+            strategy,
+            rng=np.random.default_rng(42),
+            pad_to_multiple_of=4,
         )
     )
     resumed_batches = list(
         _data_loading.batch_iterator(
-            dataset, strategy, rng=42, pad_to_multiple_of=4, initial_step=2
+            dataset,
+            strategy,
+            rng=np.random.default_rng(42),
+            pad_to_multiple_of=4,
+            initial_step=2,
         )
     )
     self.assertLen(resumed_batches, 3)
@@ -166,7 +183,7 @@ class BatchIteratorTest(parameterized.TestCase):
         _data_loading.batch_iterator(
             dataset,
             strategy,
-            rng=0,
+            rng=np.random.default_rng(0),
             pad_to_multiple_of=4,
             microbatch_size=2,
         )
@@ -188,7 +205,9 @@ class BatchIteratorTest(parameterized.TestCase):
         ) as mock_assert_equal,
     ):
       [(batch, _)] = list(
-          _data_loading.batch_iterator(dataset, strategy, rng=42)
+          _data_loading.batch_iterator(
+              dataset, strategy, rng=np.random.default_rng(42)
+          )
       )
     self.assertEqual(mock_assert_equal.call_count, 2)
     for call in mock_assert_equal.call_args_list:
@@ -222,7 +241,7 @@ class BatchIteratorTest(parameterized.TestCase):
         _data_loading.batch_iterator(
             dataset,
             strategy,
-            rng=0,
+            rng=np.random.default_rng(0),
             pad_to_multiple_of=4,
             padding_example=spec,
         )
@@ -240,7 +259,10 @@ class BatchIteratorTest(parameterized.TestCase):
     self.assertLen(
         list(
             _data_loading.batch_iterator(
-                dataset, strategy, rng=0, padding_example=valid_spec
+                dataset,
+                strategy,
+                rng=np.random.default_rng(0),
+                padding_example=valid_spec,
             )
         ),
         1,
@@ -250,7 +272,7 @@ class BatchIteratorTest(parameterized.TestCase):
           _data_loading.batch_iterator(
               dataset,
               strategy,
-              rng=0,
+              rng=np.random.default_rng(0),
               padding_example={'x': jax.ShapeDtypeStruct((3,), np.float32)},
           )
       )
@@ -259,10 +281,93 @@ class BatchIteratorTest(parameterized.TestCase):
           _data_loading.batch_iterator(
               dataset,
               strategy,
-              rng=0,
+              rng=np.random.default_rng(0),
               padding_example={'y': jax.ShapeDtypeStruct((2,), np.float32)},
           )
       )
+
+  # Tests both in-memory array PyTrees and PyGrain MapDatasets.
+  @parameterized.product(
+      to_dataset=(lambda x: x, _as_map_dataset),
+      layout=((1, 2, 3), (2, 1, 4)),
+  )
+  def test_sharded_batch_only_requires_replica_divisibility(
+      self, to_dataset, layout
+  ):
+    num_replicas, num_model, batch_size = layout
+    raw = np.arange(12, dtype=np.float32).reshape((6, 2))
+    dataset = to_dataset(raw)
+    devices = np.array(jax.devices()).reshape((num_replicas, num_model))
+    mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+    sharding = jax.sharding.NamedSharding(mesh, jax.P('replica'))
+    strategy = batch_selection.FixedBatchSampling(
+        batch_size=batch_size, iterations=1
+    )
+    [(batch, is_padding)] = list(
+        _data_loading.batch_iterator(
+            dataset, strategy, rng=0, sharding=sharding
+        )
+    )
+    expected_idx = next(strategy.batch_iterator(6, rng=0))
+    self.assertEqual(batch.shape, (batch_size, 2))
+    self.assertEqual(batch.sharding, sharding)
+    self.assertEqual(is_padding.sharding, sharding)
+    np.testing.assert_allclose(batch, raw[expected_idx])
+    np.testing.assert_array_equal(is_padding, np.zeros(batch_size, dtype=bool))
+
+  @parameterized.named_parameters(
+      ('unsharded', None, None, None),
+      ('replicated', 1, 2, jax.P(None)),
+      ('model_parallel', 1, 2, jax.P('replica')),
+      ('data_parallel', 2, 1, jax.P('replica')),
+  )
+  def test_read_batch_formal_guarantees(self, num_replicas, num_model, spec):
+    sharding = None
+    if spec is not None:
+      devices = np.array(jax.devices()).reshape((num_replicas, num_model))
+      mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
+      sharding = jax.sharding.NamedSharding(mesh, spec)
+
+    raw = {
+        'x': np.arange(30, dtype=np.float32).reshape((5, 2, 3)) + 1.0,
+        'y': np.arange(5, dtype=np.int32) + 10,
+    }
+    pad = {'x': np.zeros((2, 3), np.float32), 'y': np.int32(0)}
+    calls = []
+
+    def get_element(idx: int):
+      calls.append(int(idx))
+      return pad if idx == -1 else {'x': raw['x'][idx], 'y': raw['y'][idx]}
+
+    rng = np.random.default_rng(0)
+    index_batches = [
+        np.array([], dtype=np.int32),
+        np.array([-1, -1, -1, -1]),
+        np.array([2, 0, 2, 4]),
+        rng.choice([-1, 0, 1, 2, 3, 4], size=6),
+        rng.choice([-1, 0, 1, 2, 3, 4], size=12),
+    ]
+    executor = self.enterContext(concurrent.futures.ThreadPoolExecutor(2))
+    for indices in index_batches:
+      calls.clear()
+      batch, is_pad = _data_loading._read_batch(
+          indices, get_element, sharding, executor
+      )
+      mask = indices == -1
+
+      # Guarantee 1: exact shapes, dtypes, per-position values, and sharding.
+      expected_x = np.where(mask[:, None, None], pad['x'], raw['x'][indices])
+      expected_y = np.where(mask, pad['y'], raw['y'][indices])
+      np.testing.assert_array_equal(batch['x'], expected_x, strict=True)
+      np.testing.assert_array_equal(batch['y'], expected_y, strict=True)
+      np.testing.assert_array_equal(is_pad, mask, strict=True)
+      if sharding is not None:
+        self.assertEqual(batch['x'].sharding, sharding)
+        self.assertEqual(batch['y'].sharding, sharding)
+        self.assertEqual(is_pad.sharding, sharding)
+
+      # Guarantee 2: 1 template read (-1) + 1 read per batch position.
+      self.assertCountEqual(calls, [-1, *indices.tolist()])
 
 
 class DPTrainerTest(parameterized.TestCase):
@@ -296,9 +401,7 @@ class DPTrainerTest(parameterized.TestCase):
         optimizer=optax.sgd(0.01),
         padding_example=jax.ShapeDtypeStruct((2,), np.float32),
     )
-    state = trainer.fit(
-        dataset, trainer.init(jnp.array([5.0, 5.0])), rng_or_seed=0
-    )
+    state = trainer.fit(dataset, trainer.init(jnp.array([5.0, 5.0]), rng=0))
     self.assertEqual(int(state.step), 1)
 
   @parameterized.named_parameters(*_DATASET_TYPES)
@@ -314,7 +417,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
@@ -340,11 +443,11 @@ class DPTrainerTest(parameterized.TestCase):
       intermediate_states.append(jax.tree.map(jax.numpy.copy, state))
 
     expected_final_state = trainer.fit(
-        dataset, trainer.init(params), rng_or_seed=42, callback=callback
+        dataset, trainer.init(params, rng=42), callback=callback
     )
 
     for state in intermediate_states:
-      final_state_resumed = trainer.fit(dataset, state, rng_or_seed=42)
+      final_state_resumed = trainer.fit(dataset, state)
       np.testing.assert_allclose(
           final_state_resumed.params, expected_final_state.params
       )
@@ -370,7 +473,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=pytree_loss,
         optimizer=optax.sgd(0.01),
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
     self.assertEqual(int(state.step), 3)
 
   def test_params_change_after_training(self):
@@ -385,7 +488,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=42)
+    state = trainer.fit(dataset, trainer.init(params, rng=42))
 
     self.assertFalse(jnp.allclose(state.params, params))
 
@@ -400,7 +503,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optax.sgd(0.01),
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertIsInstance(state, training.TrainingState)
     self.assertEqual(int(state.step), 3)
@@ -416,7 +519,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optax.sgd(0.1),
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=42)
+    state = trainer.fit(dataset, trainer.init(params, rng=42))
 
     self.assertFalse(jnp.allclose(state.params, params))
 
@@ -440,12 +543,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    trainer.fit(
-        dataset,
-        trainer.init(params),
-        callback=callback,
-        rng_or_seed=0,
-    )
+    trainer.fit(dataset, trainer.init(params, rng=0), callback=callback)
 
     self.assertLen(callback_log, iterations)
     self.assertEqual([s for s, _ in callback_log], [1, 2, 3])
@@ -463,7 +561,7 @@ class DPTrainerTest(parameterized.TestCase):
         optimizer=optimizer,
         compilation_strategy=training.PadToMultiple(multiple=4),
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
 
@@ -484,7 +582,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 1)
 
@@ -510,7 +608,7 @@ class DPTrainerTest(parameterized.TestCase):
         loss_fn=counting_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(trace_count[0], 3 * 2)
@@ -528,17 +626,18 @@ class DPTrainerTest(parameterized.TestCase):
     )
 
     state = training.TrainingState(
-        step=0,
+        step=jnp.array(0, dtype=jnp.int32),
         params=jnp.copy(params),
         opt_state=optimizer.init(params),
         noise_state=trainer.plan.noise_addition_transform.init(params),
+        loss_key=jax.random.key(0),
+        batch_seed=jnp.array(0, dtype=jnp.int32),
     )
 
     batch = jnp.array([[1.0, 0.0], [0.0, 1.0]])
     is_padding = jnp.array([False, False])
-    prng_key = jax.random.key(0)
 
-    new_state, _ = trainer.train_step(state, batch, is_padding, prng_key)
+    new_state, _ = trainer.train_step(state, batch, is_padding)
 
     self.assertEqual(int(new_state.step), 1)
     self.assertFalse(jnp.allclose(new_state.params, params))
@@ -556,18 +655,19 @@ class DPTrainerTest(parameterized.TestCase):
     )
 
     state = training.TrainingState(
-        step=0,
+        step=jnp.array(0, dtype=jnp.int32),
         params=params,
         opt_state=optimizer.init(params),
         noise_state=trainer.plan.noise_addition_transform.init(params),
+        loss_key=jax.random.key(0),
+        batch_seed=jnp.array(0, dtype=jnp.int32),
     )
 
     batch = jnp.array([[1.0], [0.0]])
     is_padding = jnp.array([False, False])
-    prng_key = jax.random.key(0)
 
     # train_step is already @jax.jit decorated; call it directly.
-    new_state, _ = trainer.train_step(state, batch, is_padding, prng_key)
+    new_state, _ = trainer.train_step(state, batch, is_padding)
 
     self.assertEqual(int(new_state.step), 1)
 
@@ -608,19 +708,22 @@ class DPTrainerTest(parameterized.TestCase):
           optimizer=optax.adamw(0.01),
           compilation_strategy=training.PadToMultiple(multiple=4),
       )
-      state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+      state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
     self.assertEqual(state.params.sharding.mesh, mesh)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
 
-  @parameterized.named_parameters(
-      ('array', lambda x: x),
-      ('grain', _as_map_dataset),
+  @parameterized.product(
+      to_dataset=(lambda x: x, _as_map_dataset),
+      layout=((1, 1, 2), (1, 2, 3), (2, 1, 2)),
   )
-  def test_fit_with_batch_axis_name(self, to_dataset):
+  def test_fit_with_batch_axis_name(self, to_dataset, layout):
     """fit() shards batches along batch_axis_name on an active mesh."""
-    devices = np.array(jax.devices()[:1]).reshape((1, 1))
+    num_replicas, num_model, microbatch_size = layout
+    devices = np.array(jax.devices()[: num_replicas * num_model]).reshape(
+        (num_replicas, num_model)
+    )
     mesh = jax.sharding.Mesh(devices, ('replica', 'model'))
     param_sharding = jax.sharding.NamedSharding(
         mesh, jax.sharding.PartitionSpec('model')
@@ -646,16 +749,16 @@ class DPTrainerTest(parameterized.TestCase):
       )
       flags = execution_plan.PerformanceFlags(
           batch_axis_name='replica',
-          microbatch_size=2,
+          microbatch_size=microbatch_size,
+          param_specs=jax.sharding.PartitionSpec('model'),
       )
       trainer = training.DPTrainer(
           config=config,
           performance_flags=flags,
           loss_fn=loss_with_closed_over_base,
           optimizer=optax.sgd(0.01),
-          compilation_strategy=training.PadToMultiple(multiple=4),
       )
-      state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+      state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
     self.assertEqual(state.params.sharding.mesh, mesh)
@@ -677,7 +780,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -694,7 +797,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 3)
     self.assertLess(
@@ -714,7 +817,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
     self.assertTrue(jnp.all(jnp.isfinite(state.params)))
@@ -737,7 +840,7 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=dict_loss,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 2)
 
@@ -760,11 +863,18 @@ class DPTrainerEdgeCasesTest(parameterized.TestCase):
         loss_fn=loss_fn,
         optimizer=optimizer,
     )
-    state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(state.params.dtype, jnp.float32)
     self.assertEqual(state.param_dtypes, jnp.dtype(param_dtype))
     self.assertTrue(jnp.all(state.params.astype(param_dtype) < params))
+
+
+def _stochastic_loss(params, batch, prng):
+  """Per-example quadratic loss with additive PRNG noise."""
+  noise = jax.random.normal(prng, shape=params.shape)
+  loss = jnp.mean((params + noise - batch) ** 2)
+  return loss, {'loss': loss}
 
 
 class DPTrainerInitTest(parameterized.TestCase):
@@ -787,26 +897,45 @@ class DPTrainerInitTest(parameterized.TestCase):
     self.assertEqual(int(state.step), 0)
     np.testing.assert_array_equal(state.params, params)
 
-  def test_noise_seed_passed_to_plan(self):
-    """DPTrainer(noise_seed=...) configures deterministic noise addition."""
+  @parameterized.named_parameters(
+      ('noise', 1.0, 4, _quadratic_loss),
+      ('batches', 0.0, 2, _quadratic_loss),
+      ('loss', 0.0, 4, _stochastic_loss),
+  )
+  def test_init_rng_controls_noise_batches_and_loss(
+      self, noise, participations, loss_fn
+  ):
+    """init(rng=...) seeds each stream in isolation and draws fresh on None."""
     params = jnp.array([1.0, 2.0])
-    dataset = np.array([[0.0, 0.0], [1.0, 1.0]])
-    config = _make_config(iterations=2, noise_multiplier=1.0)
-    trainer1 = training.DPTrainer(
-        config=config,
+    dataset = np.arange(16, dtype=np.float32).reshape((8, 2))
+    config = _make_config(
+        iterations=4,
+        noise_multiplier=noise,
+        expected_participations=participations,
+    )
+    trainer = training.DPTrainer(
+        config=config, loss_fn=loss_fn, optimizer=optax.sgd(0.1)
+    )
+
+    fit = lambda rng=None: trainer.fit(dataset, trainer.init(params, rng=rng))
+    np.testing.assert_allclose(fit(42).params, fit(42).params)
+    gen = lambda: np.random.Generator(np.random.SFC64(42))
+    np.testing.assert_allclose(fit(gen()).params, fit(gen()).params)
+    self.assertFalse(jnp.allclose(fit(42).params, fit(99).params))
+    self.assertFalse(jnp.allclose(fit().params, fit().params))
+
+  def test_init_and_fit_raise_inside_jit(self):
+    """DPTrainer.init and DPTrainer.fit must not be called inside jax.jit."""
+    trainer = training.DPTrainer(
+        config=_make_config(iterations=2),
         loss_fn=_quadratic_loss,
         optimizer=optax.sgd(0.1),
-        noise_seed=7,
     )
-    trainer2 = training.DPTrainer(
-        config=config,
-        loss_fn=_quadratic_loss,
-        optimizer=optax.sgd(0.1),
-        noise_seed=7,
-    )
-    state1 = trainer1.fit(dataset, trainer1.init(params), rng_or_seed=0)
-    state2 = trainer2.fit(dataset, trainer2.init(params), rng_or_seed=0)
-    np.testing.assert_allclose(state1.params, state2.params)
+    with self.assertRaises(RuntimeError):
+      jax.jit(trainer.init)(jnp.ones(2))
+    state = trainer.init(jnp.ones(2), rng=0)
+    with self.assertRaises(RuntimeError):
+      jax.jit(trainer.fit)(jnp.ones((4, 2)), state)
 
 
 class DPTrainerPrecompileTest(parameterized.TestCase):
@@ -824,8 +953,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=42
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(42)
     )
 
     self.assertIsInstance(futures, dict)
@@ -850,8 +979,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         optimizer=optimizer,
         compilation_strategy=training.PadToMultiple(multiple=padding_multiple),
     )
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=0
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(0)
     )
 
     for size in futures:
@@ -876,8 +1005,8 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
 
     rng = np.random.default_rng(42)
     state_before = rng.__getstate__()
-    _, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=rng
+    _, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=rng
     )
     state_after = rng.__getstate__()
 
@@ -889,7 +1018,6 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
 
   def test_precompile_with_shape_dtype_struct(self):
     """precompile() should work with abstract ShapeDtypeStruct inputs."""
-    params = jax.ShapeDtypeStruct((3,), jnp.float32)
     dataset = jax.ShapeDtypeStruct((5, 3), jnp.float32)
     config = _make_config(iterations=3)
     optimizer = optax.sgd(0.01)
@@ -899,15 +1027,21 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         loss_fn=_quadratic_loss,
         optimizer=optimizer,
     )
-    _, futures = trainer._precompile(
-        dataset, jax.eval_shape(trainer.init, params), rng_or_seed=0
+    state = trainer.init(jnp.zeros(3), rng=0)
+    state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
+    _, futures = _compilation.precompile(
+        trainer,
+        dataset,
+        state,
+        rng=np.random.default_rng(0),
     )
 
     self.assertNotEmpty(futures)
     for future in futures.values():
       future.result()
 
-  def test_fit_precompile_aot_compiles_all_sizes(self):
+  @parameterized.parameters(0, None)
+  def test_fit_precompile_aot_compiles_all_sizes(self, rng):
     """precompile=True should AOT-compile once per unique batch size."""
     trace_count = [0]
 
@@ -932,12 +1066,13 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     )
 
     with self.assertLogs(level='INFO') as logs:
-      trainer.fit(dataset, trainer.init(params), rng_or_seed=0, precompile=True)
+      trainer.fit(dataset, trainer.init(params, rng=rng), precompile=True)
       for log in logs.output:
         self.assertIn('AOT-compiling train_step for batch size', log)
         self.assertNotIn('JIT-compiling train_step for batch size', log)
-      self.assertEqual(trace_count[0], 5)
-      self.assertLen(logs.output, 5)
+      self.assertLen(logs.output, trace_count[0])
+      if rng == 0:
+        self.assertEqual(trace_count[0], 5)
 
   def test_precompile_dedupes_shared_padded_sizes(self):
     """Steps sharing a padded size are lowered and compiled only once."""
@@ -965,7 +1100,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     )
 
     with self.assertLogs(level='INFO') as logs:
-      trainer.fit(dataset, trainer.init(params), rng_or_seed=0, precompile=True)
+      trainer.fit(dataset, trainer.init(params, rng=0), precompile=True)
 
     aot = [l for l in logs.output if 'AOT-compiling train_step' in l]
     self.assertLen(aot, 1)
@@ -983,9 +1118,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
     )
 
     with self.assertLogs(level='INFO') as logs:
-      state = trainer.fit(
-          dataset, trainer.init(params), rng_or_seed=0, precompile=True
-      )
+      state = trainer.fit(dataset, trainer.init(params, rng=0), precompile=True)
 
     self.assertEqual(int(state.step), 5)
     self.assertEqual(state.params.dtype, jnp.float32)
@@ -1005,16 +1138,14 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         optimizer=optax.sgd(0.01),
     )
 
-    resolved, futures = trainer._precompile(
-        dataset, trainer.init(params), rng_or_seed=0
+    resolved, futures = _compilation.precompile(
+        trainer, dataset, trainer.init(params), rng=np.random.default_rng(0)
     )
     self.assertEqual(resolved.compilation_strategy.multiple % 6, 0)
     self.assertLen(futures, 1)
 
     with self.assertLogs(level='INFO') as logs:
-      state = trainer.fit(
-          dataset, trainer.init(params), rng_or_seed=0, precompile=True
-      )
+      state = trainer.fit(dataset, trainer.init(params, rng=0), precompile=True)
 
     self.assertEqual(int(state.step), 3)
     for log in logs.output:
@@ -1032,7 +1163,7 @@ class DPTrainerPrecompileTest(parameterized.TestCase):
         compilation_strategy=training.PadToMultiple(multiple=4),
     )
     with self.assertRaisesRegex(ValueError, 'must be divisible by'):
-      trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+      trainer.fit(dataset, trainer.init(params, rng=0))
 
 
 class DPTrainerAutotuneTest(parameterized.TestCase):
@@ -1052,7 +1183,7 @@ class DPTrainerAutotuneTest(parameterized.TestCase):
     )
 
     with self.assertLogs(level='INFO') as logs:
-      state = trainer.fit(dataset, trainer.init(params), rng_or_seed=0)
+      state = trainer.fit(dataset, trainer.init(params, rng=0))
 
     self.assertEqual(int(state.step), 3)
     self.assertTrue(any('fits; pad=' in log for log in logs.output))
@@ -1160,15 +1291,15 @@ class DPTrainerCanaryAuditTest(parameterized.TestCase):
 
     short_ds = to_dataset(np.zeros((8, 2), dtype=np.float32))
     with self.assertRaisesRegex(ValueError, 'num_examples=8.*expected 10'):
-      trainer.fit(short_ds, trainer.init(params), rng_or_seed=0)
+      trainer.fit(short_ds, trainer.init(params, rng=0))
 
     exact_ds = to_dataset(np.zeros((10, 2), dtype=np.float32))
-    state = trainer.fit(exact_ds, trainer.init(params), rng_or_seed=0)
+    state = trainer.fit(exact_ds, trainer.init(params, rng=0))
     self.assertEqual(int(state.step), 2)
 
     long_ds = to_dataset(np.zeros((12, 2), dtype=np.float32))
     with self.assertRaisesRegex(ValueError, 'num_examples=12.*expected 10'):
-      trainer.fit(long_ds, trainer.init(params), rng_or_seed=0)
+      trainer.fit(long_ds, trainer.init(params, rng=0))
 
   @parameterized.parameters(True, False)
   def test_score_canaries(self, pass_untrained):
@@ -1202,7 +1333,7 @@ class DPTrainerCanaryAuditTest(parameterized.TestCase):
         optimizer=optax.sgd(0.1),
     )
 
-    state = trainer.fit(dataset, trainer.init(init_params), rng_or_seed=0)
+    state = trainer.fit(dataset, trainer.init(init_params, rng=0))
     untrained = init_params if pass_untrained else None
     auditor = training.audit(
         _quadratic_loss,
@@ -1249,6 +1380,26 @@ class DPTrainerCanaryAuditTest(parameterized.TestCase):
         )
       spy.assert_called_once()
       self.assertAlmostEqual(float(auditor.attack_auroc()), 1.0)
+
+  def test_deprecated_audit_prng_key_warns_and_matches_rng(self):
+    held_in = np.full((4, 2), 2.0, dtype=np.float32)
+    trained = jnp.full((2,), 2.0)
+
+    def stochastic_loss(params, batch, prng):
+      loss = jnp.mean((params - batch) ** 2) + jax.random.normal(prng)
+      return loss, {'loss': loss}
+
+    args = (stochastic_loss, trained, held_in, -held_in)
+    with self.assertLogs(level='WARNING') as logs:
+      auditor1 = training.audit(*args, prng_key=jax.random.key(0))
+    self.assertTrue(any('deprecated' in m for m in logs.output))
+    auditor2 = training.audit(*args, rng=0)
+    np.testing.assert_allclose(
+        auditor1._in_canary_scores, auditor2._in_canary_scores
+    )
+    np.testing.assert_allclose(
+        auditor1._out_canary_scores, auditor2._out_canary_scores
+    )
 
 
 if __name__ == '__main__':

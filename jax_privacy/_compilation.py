@@ -143,25 +143,21 @@ def _abstract_batch_and_padding(
 def _dry_run_state(
     dataset: training.Dataset,
     state: training.TrainingState,
-    rng_or_seed: np.random.Generator | int | None,
     padding_example: Any = None,
-) -> tuple[np.random.Generator, int, training.TrainingState, jax.Array]:
-  """Eval-shape setup; draws the same rng as training for JIT cache hits."""
-  rng = copy.deepcopy(np.random.default_rng(rng_or_seed))
-  seed = rng.integers(2**63)
+) -> tuple[int, training.TrainingState]:
+  """Eval-shape setup for abstract training state."""
   if _data_loading.is_map_dataset(dataset):
     n = len(dataset)
   else:
     n = _validate.batched(dataset, padding_example)
   state = jax.tree.map(jax.ShapeDtypeStruct.like, state)
-  key = jax.ShapeDtypeStruct.like(jax.random.key(seed))
-  return rng, n, state, key
+  return n, state
 
 
 def _max_padded_batch_size(
     strategy: batch_selection.BatchSelectionStrategy,
     num_examples: int,
-    rng: np.random.Generator | int | None = None,
+    rng: np.random.Generator,
     microbatch_size: int | None = None,
 ) -> int:
   """Returns the max batch size rounded up to a multiple of microbatch_size."""
@@ -178,7 +174,7 @@ def precompile(
     dataset: training.Dataset,
     state: training.TrainingState,
     *,
-    rng_or_seed: np.random.Generator | int | None = None,
+    rng: np.random.Generator,
 ) -> tuple[training.DPTrainer, dict[int, PrecompiledFuture]]:
   """[ADVANCED] Resolve config and AOT-compile the step(s) ``fit`` will run.
 
@@ -186,8 +182,8 @@ def precompile(
     trainer: The trainer whose ``train_step`` will be compiled.
     dataset: The training dataset batches are sampled from.
     state: The initial ``TrainingState``.
-    rng_or_seed: Optional RNG or seed controlling batch sampling; must match the
-      value later passed to training so cached batches align.
+    rng: Random number generator controlling batch sampling; should match the
+      generator later passed to training so cached batches align.
 
   Returns:
     ``(trainer, futures)``: the (possibly resolved) trainer and a mapping from
@@ -200,14 +196,12 @@ def precompile(
         dataset,
         state,
         strategy.hbm_safety_fraction,
-        rng_or_seed=rng_or_seed,
+        rng=rng,
     )
 
-  # This rng matches the one used in training, so even though the batch iterator
-  # is stochastic, the batch sizes and hence compiled functions will match.
-  rng, n, state, key = _dry_run_state(
-      dataset, state, rng_or_seed, trainer.padding_example
-  )
+  # Copy rng so simulating batch sizes does not advance the caller's generator.
+  rng = copy.deepcopy(rng)
+  n, state = _dry_run_state(dataset, state, trainer.padding_example)
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
   microbatch_size = trainer.performance_flags.microbatch_size
@@ -232,7 +226,7 @@ def precompile(
 
       # The compilation cache leaks the compiled batch size(s), which depend on
       # the sampled batches -- a technical DP violation if it is part of output.
-      lowered = trainer.train_step.lower(trainer, state, batch, pad, key)
+      lowered = trainer.train_step.lower(trainer, state, batch, pad)
       logging.info("AOT-compiling train_step for batch size %d", batch_size)
       # We asyncronously ahead-of-time (AOT) compile the lowered function in a
       # background thread to avoid blocking the training loop. Currently, the
@@ -248,14 +242,13 @@ def _compile_and_peak(
     state: training.TrainingState,
     batch: training.Batch,
     is_padding_example: jax.Array,
-    prng_key: jax.Array,
 ) -> tuple[jax.stages.Compiled | None, float]:
   """Compiles the step; returns (compiled, peak_bytes) or (None, inf)."""
   try:
     # Hoist constants so the measured peak matches the (hoisted) training run.
     with hoist_closed_over_constants():
       compiled = trainer.train_step.lower(
-          trainer, state, batch, is_padding_example, prng_key
+          trainer, state, batch, is_padding_example
       ).compile()
   except jax.errors.JaxRuntimeError:
     return None, float("inf")
@@ -305,7 +298,7 @@ def _autotune(
     state: training.TrainingState,
     hbm_safety_fraction: float,
     *,
-    rng_or_seed: np.random.Generator | int | None = None,
+    rng: np.random.Generator,
 ) -> tuple[training.DPTrainer, dict[int, PrecompiledFuture]]:
   """Selects the largest microbatch that fits, then compiles it once."""
   # Largest microbatch is capped by the per-chip HBM budget (None if unknown,
@@ -314,9 +307,8 @@ def _autotune(
   logging.info("[JAX-Privacy] Found per-chip HBM limit: %s", limit)
   budget = limit * hbm_safety_fraction if limit is not None else None
 
-  rng, n, state, key = _dry_run_state(
-      dataset, state, rng_or_seed, trainer.padding_example
-  )
+  rng = copy.deepcopy(rng)
+  n, state = _dry_run_state(dataset, state, trainer.padding_example)
   sharding = batch_sharding(trainer.performance_flags.batch_axis_name)
   batch_strategy = trainer.plan.batch_selection_strategy
   max_batch = max(idx.size for idx in batch_strategy.batch_iterator(n, rng=rng))
@@ -340,7 +332,7 @@ def _autotune(
     batch, padding = _abstract_batch_and_padding(
         dataset, pad, sharding, trainer.padding_example
     )
-    compiled, peak = _compile_and_peak(resolved, state, batch, padding, key)
+    compiled, peak = _compile_and_peak(resolved, state, batch, padding)
     fits = compiled is not None and (budget is None or peak <= budget)
     return _Candidate(
         trainer=resolved, pad=pad, compiled=compiled, peak=peak, fits=fits

@@ -124,7 +124,6 @@ def main(_):
       target_epsilon=1.0,
       target_delta=1e-5,
   )
-  noise_rng = random.key(42)
   grad_and_value_fn = jax_privacy.clipped_grad(
       loss_fn,
       l2_clip_norm=clipping_norm,
@@ -136,7 +135,7 @@ def main(_):
       dp_accounting.NeighboringRelation.REPLACE_ONE
   )
   privatizer = noise_addition.gaussian_privatizer(
-      stddev=noise_multiplier * sensitivity, prng_key=noise_rng
+      stddev=noise_multiplier * sensitivity, rng=42
   )
   noise_state = privatizer.init(model_params)
 

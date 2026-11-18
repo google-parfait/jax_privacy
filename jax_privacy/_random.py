@@ -19,6 +19,7 @@ import math
 import secrets
 from typing import Protocol
 
+from absl import logging
 import jax
 from jax.experimental import multihost_utils
 from jax_privacy import _validate
@@ -53,6 +54,56 @@ def default_prng_key(
   """Returns a JAX PRNGKey from a Generator, seed, or None."""
   seed = default_rng(rng).integers(2**31)
   return jax.random.key(int(seed))
+
+
+def resolve_rng(
+    rng: np.random.Generator | int | None = None,
+    *,
+    noise_seed: int | None = None,
+    prng_key: jax.Array | int | None = None,
+) -> np.random.Generator | int | None:
+  """Resolves ``rng`` while handling deprecated RNG keyword arguments.
+
+  Centralizes backwards-compatibility handling for public functions migrating
+  from legacy RNG arguments to ``rng``. At most one argument may be
+  non-``None``. When a deprecated argument is provided, logs a deprecation
+  warning, converts a ``jax.Array`` PRNG key outside JIT to an integer seed,
+  and returns the resolved value (typically forwarded to :func:`default_rng` or
+  :func:`default_prng_key`). Once the deprecated arguments are removed in
+  ``jax_privacy`` 2.6, callers can drop the ``resolve_rng`` call and pass
+  ``rng`` directly.
+
+  Example::
+
+    rng = _random.resolve_rng(rng, noise_seed=noise_seed)
+    rng = _random.default_rng(rng)
+
+  Args:
+    rng: Preferred RNG argument (a ``numpy.random.Generator``, integer seed, or
+      ``None``).
+    noise_seed: Deprecated legacy integer seed argument.
+    prng_key: Deprecated legacy JAX PRNG key or integer seed argument.
+
+  Returns:
+    The resolved ``numpy.random.Generator``, integer seed, or ``None``.
+  """
+  legacy = dict(noise_seed=noise_seed, prng_key=prng_key)
+  active = [(k, v) for k, v in legacy.items() if v is not None]
+  if len(active) + (rng is not None) > 1:
+    names = (['rng'] if rng is not None else []) + [k for k, _ in active]
+    raise ValueError(f'At most one RNG argument may be set, got {names}.')
+  if not active:
+    return rng
+  name, value = active[0]
+  logging.warning(
+      '%s is deprecated and will be removed in jax_privacy 2.6 (12/26);'
+      ' use rng instead.',
+      name,
+  )
+  if isinstance(value, jax.Array):
+    _validate.jitted(False)
+    return int(np.asarray(jax.random.key_data(value)).flat[-1])
+  return value
 
 
 class Sampler(Protocol):

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import concurrent.futures
 import copy
 import functools
@@ -34,6 +34,7 @@ import optax
 if TYPE_CHECKING:
   import grain.python as grain  # pylint: disable=g-import-not-at-top
 
+PyTree: TypeAlias = Any
 BatchAndPadding: TypeAlias = tuple[optax.ArrayTree, jax.Array]
 
 
@@ -47,8 +48,8 @@ def _from_pytree(
     dataset: optax.ArrayTree,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -86,12 +87,87 @@ def _from_pytree(
     yield jax.tree.map(fn, dataset), _to_device(indices == -1)
 
 
+def _read_batch(
+    indices: np.ndarray,
+    get_element: Callable[[int], PyTree],
+    sharding: jax.sharding.NamedSharding | None,
+    executor: concurrent.futures.Executor,
+) -> BatchAndPadding:
+  """Fetches local batch shards in parallel and places them on device.
+
+  When sharding is provided, uses jax.make_array_from_callback so each JAX
+  process only fetches and transfers the batch-axis slices addressed by its
+  local devices (including multi-controller setups where multiple processes
+  share a replicated batch shard). Slice reads are cached per call so multi-leaf
+  PyTrees and local devices sharing a replicated axis read and stack each slice
+  at most once.
+
+  Formal Guarantees:
+    - Assuming indices is identical across all JAX processes, position j along
+      axis 0 of batch equals get_element(int(indices[j])) across all PyTree
+      leaves, and is_padding_example[j] equals (indices[j] == -1).
+    - get_element(-1) is used to obtain the padding template and for any -1
+      entries in indices, and each unique addressable batch slice is fetched via
+      executor.map at most once per call.
+
+  Args:
+    indices: 1D integer array of global example indices (with -1 denoting
+      padding positions). Must match across all JAX processes.
+    get_element: Callable mapping an example index to a single-example PyTree of
+      arrays; get_element(-1) must return a data-independent zero padding
+      example defining the expected PyTree structure, shapes, and dtypes.
+    sharding: Optional NamedSharding partitioning at most axis 0 (the batch
+      dimension), leaving feature dimensions unsharded.
+    executor: Executor used to parallelize get_element calls within each local
+      batch slice.
+
+  Returns:
+    A (batch, is_padding_example) pair on device with leading dimension
+    len(indices) and sharding (if provided).
+  """
+  n = len(indices)
+  is_padding = indices == -1
+  padding = get_element(-1)
+  # Flatten PyTree leaves because make_array_from_callback builds one jax.Array
+  # leaf at a time, whereas get_element returns all leaves of an example.
+  pad_leaves, treedef = jax.tree.flatten(padding)
+
+  @functools.cache
+  def _load_slice(batch_slice: slice) -> list[np.ndarray]:
+    # Determine which batch elements this process needs and read them from disk.
+    local_indices = indices[batch_slice]
+    local_elements = list(executor.map(get_element, local_indices))
+    # Prepend padding and slice [1:] to handle empty slices cleanly.
+    stack = lambda *xs: np.stack(xs)[1:]
+    stacked: PyTree = jax.tree.map(stack, padding, *local_elements)
+    return jax.tree.leaves(stacked)
+
+  if sharding is None:
+    leaves = _load_slice(slice(None))
+    batch: PyTree = jax.tree.unflatten(treedef, leaves)
+    return jax.device_put((batch, is_padding))
+
+  def _make_leaf(i: int, pad: np.ndarray) -> jax.Array:
+    global_shape = (n, *pad.shape)
+    # _load_slice loads the full PyTree while we select only leaf i here;
+    # because _load_slice is cached, the slice is only read once across leaves.
+    callback_fn = lambda shard_slices: _load_slice(shard_slices[0])[i]
+    # Omit dtype so 64-bit NumPy leaves narrow silently like jax.device_put.
+    return jax.make_array_from_callback(global_shape, sharding, callback_fn)
+
+  leaves = [_make_leaf(i, pad) for i, pad in enumerate(pad_leaves)]
+  batch = jax.tree.unflatten(treedef, leaves)
+  callback_fn = lambda shard_slices: is_padding[shard_slices]
+  is_pad = jax.make_array_from_callback((n,), sharding, callback_fn)
+  return batch, is_pad
+
+
 def _from_pygrain(
     dataset: grain.RandomAccessDataSource,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -115,44 +191,20 @@ def _from_pygrain(
   def _get_element(idx: int) -> Any:
     return padding_element if idx == -1 else dataset[idx]
 
-  # Wrap process-local batch slices into a batch-sharded global jax.Array via
-  # safe_sharding first, then reshard to the caller's target sharding (which
-  # may replicate across some mesh axes).
-  def _to_device(x: np.ndarray) -> jax.Array:
-    if sharding is None:
-      return jax.device_put(x)
-    safe_sharding = jax.sharding.NamedSharding(
-        sharding.mesh, jax.P(sharding.mesh.axis_names)
-    )
-    x = jax.make_array_from_process_local_data(safe_sharding, x)
-    return jax.device_put(x, sharding)
-
   with concurrent.futures.ThreadPoolExecutor(max_workers) as executor:
     for indices in itertools.islice(index_iterator, initial_step, None):
       indices = batch_selection.pad_to_multiple_of(
           indices, pad_to_multiple_of, microbatch_size=microbatch_size
       )
-      # In multi-controller JAX, every process samples the same global indices
-      # from the shared rng, then slices its disjoint 1 / process_count share so
-      # each host only fetches and transforms its local records in parallel.
-      if sharding is not None:
-        indices = np.split(indices, jax.process_count())[jax.process_index()]
-      elements = list(executor.map(_get_element, indices))
-      # Prepend padding_element and slice [1:] to handle empty batches.
-      batch = jax.tree.map(
-          lambda *leaves: _to_device(np.stack(leaves)[1:]),
-          padding_element,
-          *elements,
-      )
-      yield batch, _to_device(indices == -1)
+      yield _read_batch(indices, _get_element, sharding, executor)
 
 
 def batch_iterator(
     dataset: Any,
     strategy: batch_selection.BatchSelectionStrategy,
     *,
+    rng: np.random.Generator,
     padding_example: Any = None,
-    rng: batch_selection.RngType = None,
     pad_to_multiple_of: int = 1,
     microbatch_size: int | None = None,
     initial_step: int = 0,
@@ -173,11 +225,11 @@ def batch_iterator(
       example dimension, or a ``grain.MapDataset`` (or
       ``grain.RandomAccessDataSource``).
     strategy: Batch selection strategy producing per-step example indices.
+    rng: Random number generator for batch sampling.
     padding_example: Optional single-example PyTree specification (arrays or
       ``jax.ShapeDtypeStruct``) defining the structure, shapes, and dtypes of
       zero-padded examples. If omitted on a ``MapDataset``, it is inferred from
       ``dataset[0]``.
-    rng: Optional random seed or ``numpy.random.Generator`` for batch sampling.
     pad_to_multiple_of: Pads each batch size to a multiple of this integer.
     microbatch_size: Optional microbatch size used to reorder padding examples
       for early stopping.

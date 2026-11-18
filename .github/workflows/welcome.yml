@@ -15,25 +15,71 @@
 name: Welcome First-Time Contributors
 
 on:
-  pull_request:
-    types: [opened]
+  # Safe use of workflow_run: never checks out or executes untrusted PR code;
+  # only calls the GitHub REST API to welcome first-time PR contributors.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["ci"]
+    types: [completed]
 
 permissions:
   pull-requests: write
+  issues: write
 
 jobs:
   welcome:
     runs-on: ubuntu-latest
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.actor != 'copybara-service[bot]'
     steps:
-      - uses: actions/first-interaction@3c71ce730280171fd1cfb57c00c774f8998586f7 # v1
+      - name: Welcome first-time contributor
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          pr-message: |
-            👋 **Welcome, and thanks for opening your first PR!**
+          script: |
+            const { owner, repo } = context.repo;
+            const headSha = context.payload.workflow_run.head_sha;
+            const pulls = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const pr = pulls.data.find((p) => p.head.sha === headSha);
+            if (!pr || pr.user.type === 'Bot') {
+              return;
+            }
 
-            We're excited to have you contribute. A few things to help you get started:
+            const priorPrs = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:pr author:${pr.user.login}`,
+              per_page: 5,
+            });
+            if (priorPrs.data.items.some((item) => item.number !== pr.number)) {
+              return;
+            }
 
-            - **Join the community!** Say hello on the [Google Differential Privacy Slack](https://join.slack.com/t/dp-open-source/shared_invite/zt-35hw483tz-nS5YOtGjxCHk3Ek7WiXvlg) — we'd love to hear who you are, what you're working on, and what brought you here.
-            - **A maintainer will review your PR shortly.** If you have questions in the meantime, don't hesitate to ask here or on Slack.
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const marker = 'Welcome, and thanks for opening your first PR!';
+            if (comments.data.some((c) => c.body && c.body.includes(marker))) {
+              return;
+            }
 
-            Thanks for contributing to privacy-preserving machine learning! 🔐
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: pr.number,
+              body: [
+                '👋 **Welcome, and thanks for opening your first PR!**',
+                '',
+                "We're excited to have you contribute. A few things to help you get started:",
+                '',
+                "- **Join the community!** Say hello on the [Google Differential Privacy Slack](https://join.slack.com/t/dp-open-source/shared_invite/zt-35hw483tz-nS5YOtGjxCHk3Ek7WiXvlg) — we'd love to hear who you are, what you're working on, and what brought you here.",
+                "- **A maintainer will review your PR shortly.** If you have questions in the meantime, don't hesitate to ask here or on Slack.",
+                '',
+                'Thanks for contributing to privacy-preserving machine learning! 🔐',
+              ].join('\n'),
+            });

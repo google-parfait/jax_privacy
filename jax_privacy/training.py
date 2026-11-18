@@ -38,8 +38,8 @@ Example Usage:
   >>> trainer = DPTrainer(config=cfg, loss_fn=loss_fn, optimizer=optax.sgd(0.5))
   >>> data, in_c, out_c = np.zeros((8, 2)), np.ones((4, 2)), -np.ones((4, 2))
   >>> params0 = np.zeros(2)
-  >>> state0 = trainer.init(params0)
-  >>> state = trainer.fit(np.vstack([data, in_c]), state0, rng_or_seed=0)
+  >>> state0 = trainer.init(params0, rng=0)
+  >>> state = trainer.fit(np.vstack([data, in_c]), state0)
   >>> auditor = audit(loss_fn, state.params, in_c, out_c, params0)
   >>> auditor.attack_auroc()
   1.0
@@ -52,9 +52,11 @@ from typing import Any, Protocol, TypeAlias
 
 from absl import logging
 import jax
+import jax.numpy as jnp
 import jax_privacy
 from jax_privacy import _compilation
 from jax_privacy import _data_loading
+from jax_privacy import _random
 from jax_privacy import _validate
 from jax_privacy import auditing
 from jax_privacy import execution_plan
@@ -127,12 +129,20 @@ class LossFn(Protocol):
 @jax.tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True, kw_only=True)
 class TrainingState:
-  """Container for the state of the training loop."""
+  """Complete state of a DP training run and mechanism at a given step.
 
-  step: int
+  Contains all model, optimizer, mechanism, and RNG state needed to advance the
+  loop; checkpointing and restoring a ``TrainingState`` is sufficient to resume
+  training cleanly.
+  """
+
+  step: jax.Array
   params: Params
   opt_state: OptState
   noise_state: NoiseState
+  # Per-run RNG state kept on TrainingState so DPTrainer stays stateless.
+  loss_key: jax.Array
+  batch_seed: jax.Array
   param_dtypes: Any = jax.tree.static(default=None)
 
 
@@ -166,7 +176,8 @@ class DPTrainer:
   is set and a mesh is active, :meth:`fit` shards the batch dimension of each
   batch and padding mask along ``PartitionSpec(batch_axis_name)``. In
   multi-controller setups (``jax.process_count() > 1``), every process must
-  pass the full ``dataset`` and an identical ``rng_or_seed`` to :meth:`fit`.
+  pass the full ``dataset`` to :meth:`fit` and an identical ``rng`` (or
+  ``None``) to :meth:`init`.
 
   Attributes:
     config: An :class:`~jax_privacy.execution_plan.ExecutionPlanConfig` (e.g.
@@ -190,10 +201,6 @@ class DPTrainer:
       of zero-padded examples. If omitted on a ``grain.MapDataset``, it is
       inferred from ``dataset[0]``, which requires a non-empty dataset with
       fixed element shapes.
-    noise_seed: Optional seed for the random number generator used for noise
-      addition. If ``None``, a fresh random seed is drawn; pass an explicit seed
-      for multi-host coordination or reproducible tests (and keep it secret in
-      production deployments).
   """
 
   config: execution_plan.ExecutionPlanConfig
@@ -209,7 +216,6 @@ class DPTrainer:
       default_factory=_compilation.PadToMultiple
   )
   padding_example: Any = None
-  noise_seed: int | None = None
 
   def __post_init__(self):
     _ = self.plan  # Build untraced so cached PRNG key isn't a leaked tracer.
@@ -217,24 +223,57 @@ class DPTrainer:
   @functools.cached_property
   def plan(self) -> execution_plan.DPExecutionPlan:
     """``DPExecutionPlan`` built from ``config`` and ``performance_flags``."""
-    return self.config.make(self.performance_flags, noise_seed=self.noise_seed)
+    # Placeholder rng; per-run noise keys are initialized in init.
+    return self.config.make(self.performance_flags, rng=0)
 
-  @jax.jit(static_argnames=["self"])
-  def init(self, params: Params) -> TrainingState:
-    """Initialize a ``TrainingState`` at step 0."""
-    optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
-    if (specs := self.performance_flags.param_specs) is not None:
-      optimizer = sharding_utils.with_sharding_specs(optimizer, specs)
-    param_dtypes = jax.tree.map(jax.numpy.dtype, params)
-    master_params = optax.tree.cast(params, self.performance_flags.dtype)
-    noise_state = self.plan.noise_addition_transform.init(master_params)
-    return TrainingState(
-        step=jax.numpy.zeros((), dtype=jax.numpy.int32),
-        params=master_params,
-        opt_state=optimizer.init(master_params),
-        noise_state=noise_state,
-        param_dtypes=param_dtypes,
-    )
+  def init(
+      self,
+      params: Params,
+      *,
+      rng: np.random.Generator | int | None = None,
+  ) -> TrainingState:
+    """Initialize a ``TrainingState`` at step 0.
+
+    Args:
+      params: Initial model parameter PyTree.
+      rng: Optional seed or ``numpy.random.Generator`` used only to sample
+        initial integer seeds for noise addition, loss evaluation, and batch
+        selection. Unlike lower-level APIs (such as batch selection) that use
+        ``rng`` directly, ``DPTrainer`` falls back to
+        ``numpy.random.default_rng`` and :func:`jax.random.key` initialized from
+        those sampled seeds.
+
+    Returns:
+      Initial ``TrainingState`` at step 0.
+    """
+    _validate.jitted(False)
+    flags = self.performance_flags
+    rng = _random.default_rng(flags.noise_seed if rng is None else rng)
+    noise_seed, loss_seed, batch_seed = map(int, rng.integers(2**31, size=3))
+    # TODO: b/585973373 - Avoid calling config.make a second time here once
+    # privatizer init accepts rng directly; train_step reuses self.plan.
+    privatizer = self.config.make(flags, noise_seed).noise_addition_transform
+
+    # JIT-allocate state so train_step buffer donation cannot alias params or
+    # shared zero leaves.
+    @jax.jit
+    def _init(params):
+      optimizer = aug_optimizers.as_augmented_optimizer(self.optimizer)
+      if (specs := flags.param_specs) is not None:
+        optimizer = sharding_utils.with_sharding_specs(optimizer, specs)
+      param_dtypes = jax.tree.map(jax.numpy.dtype, params)
+      master_params = optax.tree.cast(params, flags.dtype)
+      return TrainingState(
+          step=jnp.array(0, dtype=jnp.int32),
+          params=master_params,
+          opt_state=optimizer.init(master_params),
+          noise_state=privatizer.init(master_params),
+          loss_key=jax.random.key(loss_seed),
+          batch_seed=jnp.array(batch_seed, dtype=jnp.int32),
+          param_dtypes=param_dtypes,
+      )
+
+    return _init(params)
 
   @jax.jit(static_argnames=["self"], donate_argnames=["state"])
   def train_step(
@@ -242,7 +281,6 @@ class DPTrainer:
       state: TrainingState,
       batch: Batch,
       is_padding_example: jax.Array,
-      prng_key: jax.Array,
   ) -> tuple[TrainingState, PerExampleAux]:
     """Executes a single DP training step.
 
@@ -254,8 +292,6 @@ class DPTrainer:
       batch: A PyTree of arrays representing the current mini-batch.
       is_padding_example: A boolean array indicating which examples in ``batch``
         are padding (and should be ignored).
-      prng_key: Base PRNG key; a step-specific key is derived via
-        ``jax.random.fold_in(prng_key, state.step)``.
 
     Returns:
       A tuple ``(new_state, aux)`` where ``new_state`` is the updated
@@ -271,7 +307,7 @@ class DPTrainer:
         pre_clipping_transform=pre_clip_fn,
         prng_argnum=2,
     )
-    loss_prng = jax.random.fold_in(prng_key, state.step)
+    loss_prng = jax.random.fold_in(state.loss_key, state.step)
     params = state.params
     if state.param_dtypes is not None:
       # Cast master params to original dtypes outside grad_fn so per-example
@@ -293,21 +329,11 @@ class DPTrainer:
         params=new_params,
         opt_state=new_opt_state,
         noise_state=new_noise_state,
+        loss_key=state.loss_key,
+        batch_seed=state.batch_seed,
         param_dtypes=state.param_dtypes,
     )
     return new_state, aux
-
-  def _precompile(
-      self,
-      dataset: Dataset,
-      state: TrainingState,
-      *,
-      rng_or_seed: np.random.Generator | int | None = None,
-  ) -> tuple["DPTrainer", dict[int, PrecompiledFuture]]:
-    """[ADVANCED] Resolve config and AOT-compile the steps ``fit`` runs."""
-    return _compilation.precompile(
-        self, dataset, state, rng_or_seed=rng_or_seed
-    )
 
   def fit(
       self,
@@ -315,7 +341,6 @@ class DPTrainer:
       state: TrainingState,
       *,
       callback: CallbackFn | None = None,
-      rng_or_seed: np.random.Generator | int | None = None,
       precompile: bool = True,
   ) -> TrainingState:
     """Runs an end-to-end differentially private training loop.
@@ -333,11 +358,6 @@ class DPTrainer:
         arrays you need to retain after ``fit`` returns.
       callback: Called after each step as ``callback(step, state, aux)``.
         ``step`` is a Python int.
-      rng_or_seed: Optional random seed or ``numpy.random.Generator``, used for
-        sampling batches (impacting privacy) and initializing the loss PRNG key
-        (potentially impacting utility). Does not influence the noise addition
-        transform, which is configured via the
-        :class:`~jax_privacy.execution_plan.DPExecutionPlan`.
       precompile: A boolean indicating whether to asynchronously precompile
         ``train_step`` for the batch sizes encountered, instead of just-in-time
         compiling on the fly, which can idle accelerators during training.
@@ -347,6 +367,7 @@ class DPTrainer:
     Returns:
       Final ``TrainingState``.
     """
+    _validate.jitted(False)
     if (n := getattr(self.config, "num_examples", None)) is not None:
       is_map = _data_loading.is_map_dataset(dataset)
       m = len(dataset) if is_map else _validate.batched(dataset)
@@ -358,20 +379,17 @@ class DPTrainer:
     trainer: DPTrainer = self
     futures: dict[int, PrecompiledFuture] = {}
 
+    rng = _random.default_rng(int(state.batch_seed.item()))
     if (
         precompile
         or getattr(self.compilation_strategy, "multiple", None) is None
     ):
-      trainer, futures = self._precompile(
-          dataset, state, rng_or_seed=rng_or_seed
-      )
+      # precompile copies rng internally so rng stays aligned with
+      # batch_iterator (avoiding unanticipated or out-of-order compilations).
+      trainer, futures = _compilation.precompile(self, dataset, state, rng=rng)
     assert isinstance(trainer.compilation_strategy, PadToMultiple)
     assert trainer.compilation_strategy.multiple is not None
     warn_on_cache_miss = bool(futures)
-
-    # We need tight alignment between how rng is used here and in precompile().
-    rng = np.random.default_rng(rng_or_seed)
-    prng_key = jax.random.key(int(rng.integers(2**63)))
 
     with _compilation.hoist_closed_over_constants():
       axis = trainer.performance_flags.batch_axis_name
@@ -396,7 +414,7 @@ class DPTrainer:
           logging.info("JIT-compiling train_step for batch size %d", batch_size)
           logging.warning("Cache Miss! Precompile is not working as intended.")
 
-        state, aux = step_fn(state, batch, is_padding_example, prng_key)
+        state, aux = step_fn(state, batch, is_padding_example)
         step += 1
 
         del batch, is_padding_example
@@ -442,7 +460,8 @@ def audit(
     untrained: Params | None = None,
     *,
     microbatch_size: int | None = None,
-    prng_key: jax.Array | int = 0,
+    rng: np.random.Generator | int | None = None,
+    prng_key: jax.Array | int | None = None,
 ) -> auditing.CanaryScoreAuditor:
   """Scores held-in and held-out canaries and returns an auditor.
 
@@ -455,14 +474,16 @@ def audit(
       as ``loss(untrained) - loss(trained)``. If ``None``, scores are
       ``-loss(trained)``.
     microbatch_size: Optional microbatch size for evaluating ``loss_fn``.
-    prng_key: Random seed or PRNG key for loss_fn evaluation.
+    rng: Optional random seed or ``numpy.random.Generator`` for ``loss_fn``
+      evaluation.
+    prng_key: Deprecated; use ``rng`` instead.
 
   Returns:
     A :class:`~jax_privacy.auditing.CanaryScoreAuditor` initialized with the
     held-in and held-out canary scores.
   """
-  if isinstance(prng_key, int):
-    prng_key = jax.random.key(prng_key)
+  rng = _random.resolve_rng(rng, prng_key=prng_key)
+  prng_key = _random.default_prng_key(rng)
   in_key, out_key = jax.random.split(prng_key)
   args = (loss_fn, trained)
   kw = dict(untrained=untrained, microbatch_size=microbatch_size)

@@ -18,20 +18,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jax_privacy"
-version = "2.4.0"
+version = "2.5.0"
 description = "Algorithms for Privacy-Preserving Machine Learning in JAX."
 authors = [
   { name="Google DeepMind", email="jax-privacy-dev@google.com" },
 ]
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "absl-py>=1.2.0",
-    "dp_accounting @ git+https://github.com/google/differential-privacy.git#subdirectory=python/dp_accounting",
+    "dp-accounting>=0.7.0",
     "jax>=0.8.1",
     "jaxlib>=0.8.1",
     "numpy>=2.0.0",
-    "optax @ git+https://github.com/google-deepmind/optax.git",
+    "optax>=0.2.9",
     "scipy>=1.9.2",
 ]
 
@@ -129,12 +129,15 @@ project-includes = [
   "tests/**/*.py",
   "examples/**/*.py",
 ]
-python-version = "3.11"
+python-version = "3.12"
 # `basic` is the preset Pyrefly applies to unconfigured projects; pin it so the
 # checker level does not silently change just because this config exists.
 preset = "basic"
 
 [tool.uv]
+required-environments = [
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
 override-dependencies = [
   "typing-extensions>=4.15.0",
 ]

@@ -769,12 +769,13 @@ for batch in strategy.batch_iterator(num_examples, rng=secure_rng):
 ```
 
 Similarly, {meth}`~jax_privacy.execution_plan.ExecutionPlanConfig.make` and
-{class}`~jax_privacy.training.DPTrainer` accept an optional `noise_seed` for
-noise addition. When `noise_seed=None` (the default), a fresh random seed is
-drawn from `os.urandom`, which is suitable for single-host runs. Pass an
-explicit `noise_seed` when you need deterministic noise across multi-host
-workers or reproducible tests; in privacy-sensitive deployments, treat any
-explicit seed as secret and do not expose it in released logs or configurations.
+{meth}`~jax_privacy.training.DPTrainer.init` accept the same optional `rng`
+argument (`None`, an integer seed, or a `np.random.Generator`). When `rng=None`
+(the default), a fresh cryptographically secure seed is drawn from OS entropy
+and automatically broadcast across hosts in multi-host runs. Pass an explicit
+seed when you need reproducible tests or experiments; in privacy-sensitive
+deployments, treat any explicit seed as secret and do not expose it in released
+logs or configurations.
 
 This design provides three levels of assurance:
 
