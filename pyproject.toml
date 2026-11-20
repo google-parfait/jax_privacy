@@ -20,6 +20,7 @@ build-backend = "setuptools.build_meta"
 name = "jax_privacy"
 version = "2.5.0"
 description = "Algorithms for Privacy-Preserving Machine Learning in JAX."
+readme = "README.md"
 authors = [
   { name="Google DeepMind", email="jax-privacy-dev@google.com" },
 ]
@@ -92,7 +93,8 @@ dev = [
 Homepage = "https://github.com/google-parfait/jax_privacy"
 
 [tool.setuptools.packages.find]
-exclude = ["*_test.py", "examples*", "experiments*"]
+include = ["jax_privacy*"]
+exclude = ["*_test.py", "tests*", "examples*", "experiments*"]
 namespaces = true
 
 [tool.setuptools]

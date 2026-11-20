@@ -457,15 +457,31 @@ class DPTrainerTest(parameterized.TestCase):
     """Train loop works with a Grain MapDataset yielding PyTrees."""
     params = jnp.array([1.0, 2.0])
     data = [
-        {'x': np.array([1.0, 2.0]), 'y': np.array([0.5])},
-        {'x': np.array([3.0, 4.0]), 'y': np.array([1.5])},
-        {'x': np.array([5.0, 6.0]), 'y': np.array([2.5])},
+        {'x': np.array([1.0, 2.0]), 'y': np.array([0.5]), 'label': 1},
+        {'x': np.array([3.0, 4.0]), 'y': np.array([1.5]), 'label': 2},
+        {'x': np.array([5.0, 6.0]), 'y': np.array([2.5]), 'label': 3},
     ]
     dataset = grain.MapDataset.source(data)
+    [(batch, is_pad)] = list(
+        _data_loading.batch_iterator(
+            dataset,
+            batch_selection.FixedBatchSampling(batch_size=2, iterations=1),
+            rng=np.random.default_rng(0),
+            padding_example=dataset[0],
+            pad_to_multiple_of=4,
+        )
+    )
+    self.assertEqual(batch['label'].shape, (4,))
+    np.testing.assert_array_equal(batch['label'][2:], [0, 0])
+    np.testing.assert_array_equal(is_pad, [False, False, True, True])
 
     def pytree_loss(params, batch, prng):
       del prng
-      loss = jnp.mean((params - batch['x']) ** 2) + jnp.mean(batch['y'])
+      loss = (
+          jnp.mean((params - batch['x']) ** 2)
+          + jnp.mean(batch['y'])
+          + jnp.mean(batch['label'].astype(jnp.float32))
+      )
       return loss, {'loss': loss}
 
     trainer = training.DPTrainer(

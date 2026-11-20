@@ -181,9 +181,12 @@ def _from_pygrain(
     padding_example = dataset[0]
   _validate.equal_across_hosts(dataset=dataset[0])
   index_iterator = strategy.batch_iterator(len(dataset), rng=copy.deepcopy(rng))
-  padding_element = jax.tree.map(
-      lambda x: np.zeros(x.shape, dtype=x.dtype), padding_example
-  )
+
+  def _zero_leaf(x: Any) -> np.ndarray:
+    x = x if hasattr(x, "shape") else np.asarray(x)
+    return np.zeros(x.shape, dtype=x.dtype)
+
+  padding_element = jax.tree.map(_zero_leaf, padding_example)
 
   # TODO: Skip or zero out MapDataset elements whose structure,
   # shape, or dtype does not match padding_example, and document this as a

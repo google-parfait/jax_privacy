@@ -133,6 +133,7 @@ def _abstract_batch_and_padding(
     dim = 1
 
   def _to_abstract(x):
+    x = x if hasattr(x, "shape") else np.asarray(x)
     return jax.ShapeDtypeStruct(
         (size, *x.shape[dim:]), x.dtype, sharding=sharding
     )
