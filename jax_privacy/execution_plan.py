@@ -341,6 +341,10 @@ class BandMFConfig:
         l2_clip_norm=self.l2_clip_norm,
         normalize_by=self.normalize_by,
     )
+    if np.isinf(self.l2_clip_norm) and self.rescale_to_unit_norm:
+      raise ValueError(
+          'rescale_to_unit_norm must be False when l2_clip_norm is inf.'
+      )
     _validate.bounded_1d(self.strategy, self.iterations)
     if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
       max_participations = math.ceil(self.iterations / self.num_bands)
@@ -436,6 +440,8 @@ class BandMFConfig:
 
   def _get_dp_event(self, sigma: float) -> dp_accounting.DpEvent:
     """Returns a DpEvent for the BandMF mechanism."""
+    if sigma == 0.0 or np.isinf(self.l2_clip_norm):
+      return dp_accounting.NonPrivateDpEvent()
     if self.sub_strategy == CyclicInnerStrategy.RANDOM_ALLOCATION:
       return accounting.random_allocation_bandmf_event(
           noise_multiplier=sigma,
@@ -494,6 +500,8 @@ class BandMFConfig:
     Returns:
       A new BandMFConfig with calibrated ``noise_multiplier``.
     """
+    if np.isinf(self.l2_clip_norm):
+      raise ValueError('Cannot calibrate when l2_clip_norm is inf.')
     noise_multiplier = dp_accounting.calibrate_dp_mechanism(
         make_fresh_accountant=lambda: accountant_fn(self._neighboring_relation),
         make_event_from_param=self._get_dp_event,
@@ -605,34 +613,37 @@ class BandMFConfig:
           partition_type=self._partition_type,
       )
 
-    max_column_norm = self._max_column_norm
-    column_normalize_for_n = self.iterations if self.column_normalize else None
-    # Keep closed-over Toeplitz coefficients uncommitted so shard_map in
-    # with_sharding_specs does not see AxisType.Auto constants; np.asarray
-    # strips any mesh sharding already attached to self.strategy.
-    with jax.set_mesh(None):
-      strategy = np.asarray(self.strategy, dtype=performance_flags.dtype)
-      noising_matrix = toeplitz.inverse_as_streaming_matrix(
-          strategy, column_normalize_for_n
-      )
-
-    query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
-
     dp_event = self._get_dp_event(self.noise_multiplier)
-
-    privatizer = noise_addition.matrix_factorization_privatizer(
-        noising_matrix,
-        stddev=float(
-            self.noise_multiplier * query_sensitivity * max_column_norm
-        ),
-        rng=rng,
-        dtype=performance_flags.dtype,
-        intermediate_strategy=performance_flags.intermediate_strategy,
-    )
-    if performance_flags.param_specs is not None:
-      privatizer = sharding_utils.with_sharding_specs(
-          privatizer, performance_flags.param_specs
+    if self.noise_multiplier == 0.0:
+      privatizer = optax.identity()
+    else:
+      max_column_norm = self._max_column_norm
+      column_normalize_for_n = (
+          self.iterations if self.column_normalize else None
       )
+      # Keep closed-over Toeplitz coefficients uncommitted so shard_map in
+      # with_sharding_specs does not see AxisType.Auto constants; np.asarray
+      # strips any mesh sharding already attached to self.strategy.
+      with jax.set_mesh(None):
+        strategy = np.asarray(self.strategy, dtype=performance_flags.dtype)
+        noising_matrix = toeplitz.inverse_as_streaming_matrix(
+            strategy, column_normalize_for_n
+        )
+
+      query_sensitivity = clipped_grad_transform(lambda: None).sensitivity()
+      privatizer = noise_addition.matrix_factorization_privatizer(
+          noising_matrix,
+          stddev=float(
+              self.noise_multiplier * query_sensitivity * max_column_norm
+          ),
+          rng=rng,
+          dtype=performance_flags.dtype,
+          intermediate_strategy=performance_flags.intermediate_strategy,
+      )
+      if performance_flags.param_specs is not None:
+        privatizer = sharding_utils.with_sharding_specs(
+            privatizer, performance_flags.param_specs
+        )
 
     return DPExecutionPlan(
         clipped_grad=clipped_grad_transform,

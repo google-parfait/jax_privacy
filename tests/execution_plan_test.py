@@ -18,6 +18,7 @@ import math
 from absl.testing import absltest
 from absl.testing import parameterized
 import dp_accounting
+import jax.numpy as jnp
 from jax_privacy import batch_selection
 from jax_privacy import execution_plan
 import numpy as np
@@ -368,6 +369,40 @@ class ExecutionPlanTest(parameterized.TestCase):
       execution_plan.PerformanceFlags(
           batch_axis_name="data", spmd_axis_name="data"
       )
+
+  def test_bandmf_zero_noise_and_infinite_clip_guards(self):
+    with self.assertRaisesRegex(ValueError, "rescale_to_unit_norm"):
+      BandMFConfig.default(
+          num_bands=1,
+          iterations=4,
+          expected_participations=1,
+          noise_multiplier=0.0,
+          l2_clip_norm=float("inf"),
+          rescale_to_unit_norm=True,
+      )
+
+    config = BandMFConfig.default(
+        num_bands=1,
+        iterations=4,
+        expected_participations=1,
+        noise_multiplier=0.0,
+        l2_clip_norm=float("inf"),
+        rescale_to_unit_norm=False,
+        normalize_by=2.0,
+    )
+    with self.assertRaisesRegex(ValueError, "Cannot calibrate"):
+      config.calibrate(epsilon=1.0, delta=1e-5)
+
+    plan = config.make()
+    self.assertIsInstance(plan.dp_event, dp_accounting.NonPrivateDpEvent)
+    grad_fn = plan.clipped_grad(lambda p, x: 0.5 * jnp.sum((p - x) ** 2))
+    params = jnp.array([3.0, -1.0])
+    batch = jnp.array([[1.0, 1.0], [1.0, 1.0]])
+    grads = grad_fn(params, batch)
+    state = plan.noise_addition_transform.init(grads)
+    out_grads, _ = plan.noise_addition_transform.update(grads, state)
+    self.assertTrue(np.all(np.isfinite(out_grads)))
+    np.testing.assert_allclose(out_grads, np.array([2.0, -2.0]))
 
 
 if __name__ == "__main__":
