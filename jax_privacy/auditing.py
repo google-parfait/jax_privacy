@@ -558,8 +558,8 @@ class CanaryScoreAuditor:
       in_canary_scores: Attack scores of held-in canaries.
       out_canary_scores: Attack scores of held-out canaries.
     """
-    self._in_canary_scores = np.asarray(in_canary_scores)
-    self._out_canary_scores = np.asarray(out_canary_scores)
+    self._in_canary_scores = np.array(in_canary_scores, copy=True)
+    self._out_canary_scores = np.array(out_canary_scores, copy=True)
     _validate.non_empty(
         in_canary_scores=self._in_canary_scores,
         out_canary_scores=self._out_canary_scores,
@@ -569,10 +569,22 @@ class CanaryScoreAuditor:
         in_canary_scores=self._in_canary_scores,
         out_canary_scores=self._out_canary_scores,
     )
+    self._in_canary_scores.flags.writeable = False
+    self._out_canary_scores.flags.writeable = False
 
     self._thresholds, self._tn_counts, self._fn_counts = _get_tn_fn_counts(
         self._in_canary_scores, self._out_canary_scores
     )
+
+  @property
+  def in_scores(self) -> np.ndarray:
+    """Returns a read-only 1D array of held-in canary scores."""
+    return self._in_canary_scores
+
+  @property
+  def out_scores(self) -> np.ndarray:
+    """Returns a read-only 1D array of held-out canary scores."""
+    return self._out_canary_scores
 
   @property
   def num_canaries(self) -> tuple[int, int]:
