@@ -101,6 +101,28 @@ class RandomTest(parameterized.TestCase):
     with self.assertRaisesRegex(RuntimeError, 'outside a jitted context'):
       jax.jit(lambda k: _random.resolve_rng(prng_key=k))(jax.random.key(0))
 
+  @parameterized.named_parameters(
+      ('typed_threefry', 'threefry2x32', False),
+      ('legacy_threefry', 'threefry2x32', True),
+      ('typed_rbg', 'rbg', False),
+  )
+  def test_resolve_rng_preserves_all_key_words(self, impl, legacy):
+    key = jax.random.key(0, impl=impl)
+    words = np.asarray(jax.random.key_data(key)).copy()
+    # Both keys end in zero, but differ in a word that must not be discarded.
+    words[0] = 1
+    other_key = jax.random.wrap_key_data(words, impl=impl)
+    if legacy:
+      key = jax.random.key_data(key)
+      other_key = jax.random.key_data(other_key)
+
+    seed = _random.resolve_rng(prng_key=key)
+    other_seed = _random.resolve_rng(prng_key=other_key)
+    self.assertNotEqual(seed, other_seed)
+    samples = _random.default_rng(seed).standard_normal(8)
+    other_samples = _random.default_rng(other_seed).standard_normal(8)
+    self.assertFalse(np.array_equal(samples, other_samples))
+
   def test_uniqueness(self):
     rng = np.random.default_rng(42)
     shape = (104,)
