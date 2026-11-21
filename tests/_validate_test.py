@@ -69,6 +69,16 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'Expected y to have ndim=1, got 2'):
       _validate.ndim(1, x=[1, 2], y=[[1, 2]])
 
+  def test_divisible(self):
+    _validate.divisible(x=0, y=4)
+    _validate.divisible(x=8, y=4)
+    with self.assertRaisesRegex(ValueError, 'x=5 must be divisible by y=4'):
+      _validate.divisible(x=5, y=4)
+    with self.assertRaisesRegex(ValueError, 'Expected y=0 > 0'):
+      _validate.divisible(x=4, y=0)
+    with self.assertRaisesRegex(ValueError, 'Expected 2 keyword arguments'):
+      _validate.divisible(x=4)
+
   def test_non_empty(self):
     _validate.non_empty(
         x=[1], y=(1, 2), z=jax.numpy.zeros(3), s=jax.numpy.array(1)

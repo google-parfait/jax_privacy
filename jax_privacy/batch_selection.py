@@ -241,8 +241,8 @@ def pad_to_multiple_of(
   """
   _validate.ndim(1, indices=indices)
   _validate.positive(multiple=multiple)
-  if microbatch_size is not None and multiple % microbatch_size != 0:
-    raise ValueError(f'{multiple=} must be divisible by {microbatch_size=}.')
+  if microbatch_size is not None:
+    _validate.divisible(multiple=multiple, microbatch_size=microbatch_size)
   curr_size = indices.shape[0]
   pad_size = (multiple - curr_size) % multiple
   new_indices = np.full(curr_size + pad_size, -1, dtype=indices.dtype)

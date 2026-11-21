@@ -40,6 +40,17 @@ def positive(**kwargs):
       raise ValueError(f'Expected {name}={value} > 0.')
 
 
+def divisible(**kwargs):
+  """Validates that the first keyword argument is divisible by the second."""
+  items = list(kwargs.items())
+  if len(items) != 2:
+    raise ValueError(f'Expected 2 keyword arguments, got {len(items)}.')
+  (a_name, a), (b_name, b) = items[0], items[1]
+  positive(**{b_name: b})
+  if a % b != 0:
+    raise ValueError(f'{a_name}={a} must be divisible by {b_name}={b}.')
+
+
 def in_range(lo, hi, closed='both', **kwargs):
   """Validates that all values are in the interval from lo to hi.
 
