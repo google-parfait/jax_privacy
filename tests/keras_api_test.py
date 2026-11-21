@@ -589,8 +589,9 @@ class KerasApiTest(parameterized.TestCase):
     train_size = 100
     batch_size = 10
     gas = 4
-    # With steps_per_epoch = None: effective_batch_size = 40.
-    # default_steps_per_epoch for optimizer steps = 100 // 40 = 2.
+    # With steps_per_epoch = None: 100 // 10 = 10 micro-batches per epoch.
+    # Keras carries the 2 leftover micro-batches of each epoch over, so 30
+    # micro-batches give 30 // 4 = 7 updates, not 3 * (100 // 40) = 6.
     steps = keras_api._calculate_optimizer_steps_to_perform_in_fit(
         train_size=train_size,
         batch_size=batch_size,
@@ -599,7 +600,7 @@ class KerasApiTest(parameterized.TestCase):
         steps_per_epoch=None,
         gradient_accumulation_steps=gas,
     )
-    self.assertEqual(steps, 2 * 3)
+    self.assertEqual(steps, 7)
 
     # With explicit steps_per_epoch (e.g. 12 microbatches -> 3 optimizer steps)
     steps_explicit = keras_api._calculate_optimizer_steps_to_perform_in_fit(
@@ -611,6 +612,96 @@ class KerasApiTest(parameterized.TestCase):
         gradient_accumulation_steps=gas,
     )
     self.assertEqual(steps_explicit, 3 * 2)
+
+    # Micro-batches left over from an earlier fit() complete an update early:
+    # 2 performed + 10 upcoming = 12 micro-batches = 3 updates, none done yet.
+    steps_after_leftover = (
+        keras_api._calculate_optimizer_steps_to_perform_in_fit(
+            train_size=train_size,
+            batch_size=batch_size,
+            epochs=1,
+            initial_epoch=0,
+            steps_per_epoch=None,
+            gradient_accumulation_steps=gas,
+            performed_microbatch_steps=2,
+        )
+    )
+    self.assertEqual(steps_after_leftover, 3)
+
+  def test_fit_budget_counts_accumulation_carried_across_epochs(self):
+    train_size = 100
+    batch_size = 10
+    gas = 4
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    def make_model(train_steps):
+      model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+      dp_params = keras_api.DPKerasConfig(
+          epsilon=100.0,
+          delta=1e-5,
+          clipping_norm=1.0,
+          batch_size=batch_size,
+          gradient_accumulation_steps=gas,
+          train_steps=train_steps,
+          train_size=train_size,
+          noise_multiplier=1.0,
+          seed=123,
+      )
+      model = keras_api.make_private(model, dp_params)
+      model.compile(
+          loss="mse",
+          optimizer=keras.optimizers.SGD(
+              learning_rate=0.01, gradient_accumulation_steps=gas
+          ),
+      )
+      return model
+
+    # 3 epochs of 10 micro-batches perform 30 // 4 = 7 optimizer updates, so a
+    # budget of 3 * (100 // 40) = 6 updates must be refused.
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
+      make_model(train_steps=6).fit(x, y, batch_size=batch_size, epochs=3)  # pylint: disable=not-callable
+    make_model(train_steps=7).fit(x, y, batch_size=batch_size, epochs=3)  # pylint: disable=not-callable
+
+  def test_repeated_fit_with_gradient_accumulation_counts_optimizer_updates(
+      self,
+  ):
+    train_size = 40
+    batch_size = 4
+    gas = 2
+    # Two epochs of 40 // 8 = 5 optimizer updates each.
+    train_steps = 2 * (train_size // (batch_size * gas))
+    x = np.random.uniform(0, 1, (train_size, 4)).astype(np.float32)
+    y = np.random.uniform(0, 1, (train_size, 1)).astype(np.float32)
+
+    model = keras.Sequential([keras.Input(shape=(4,)), keras.layers.Dense(1)])
+    dp_params = keras_api.DPKerasConfig(
+        epsilon=100.0,
+        delta=1e-5,
+        clipping_norm=1.0,
+        batch_size=batch_size,
+        gradient_accumulation_steps=gas,
+        train_steps=train_steps,
+        train_size=train_size,
+        noise_multiplier=1.0,
+        seed=123,
+    )
+    model = keras_api.make_private(model, dp_params)
+    optimizer = keras.optimizers.SGD(
+        learning_rate=0.01, gradient_accumulation_steps=gas
+    )
+    model.compile(loss="mse", optimizer=optimizer)
+
+    # Each fit() runs 10 micro-batches, i.e. 5 optimizer updates, so the
+    # budget of 10 updates allows exactly two one-epoch fits.
+    model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+    model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
+    with self.assertRaisesRegex(
+        RuntimeError, "you will run out of privacy budget"
+    ):
+      model.fit(x, y, batch_size=batch_size, epochs=1)  # pylint: disable=not-callable
 
   def test_fit_with_poisson_sampling_and_gradient_accumulation(self):
     train_size = 40
