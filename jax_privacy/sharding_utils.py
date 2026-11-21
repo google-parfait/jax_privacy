@@ -221,10 +221,7 @@ def compute_early_stopping_order(
   indices = np.arange(batch_size)
   if microbatch_size is None:
     return indices
-  elif batch_size % microbatch_size != 0:
-    raise ValueError(
-        f'batch_size={batch_size} is not divisible by {microbatch_size=}'
-    )
+  _validate.divisible(batch_size=batch_size, microbatch_size=microbatch_size)
   return indices.reshape(-1, microbatch_size).T.flatten()
 
 
