@@ -21,7 +21,7 @@ us at <jax-privacy-open-source@google.com>. Also, consider creating an
 If your question is about Differential Privacy in general there are also related
 communities where there is a broader audience:
 
-* [Google Differential Privacy community](https://join.slack.com/t/dp-open-source/shared_invite/zt-35hw483tz-nS5YOtGjxCHk3Ek7WiXvlg)
-  in Slack.
+* [OpenDP Slack](https://join.slack.com/t/opendp/shared_invite/zt-1aca9bm7k-hG7olKz6CiGm8htI2lxE8w)
+  ([#google-dp channel](https://app.slack.com/client/T01DHFZ2E4D/C0CJK1PGGNA)).
 * [OpenMined community](https://slack.openmined.org/) in Slack has a
   differential-privacy channel.

@@ -77,7 +77,7 @@ jobs:
                 '',
                 "We're excited to have you contribute. A few things to help you get started:",
                 '',
-                "- **Join the community!** Say hello on the [Google Differential Privacy Slack](https://join.slack.com/t/dp-open-source/shared_invite/zt-35hw483tz-nS5YOtGjxCHk3Ek7WiXvlg) — we'd love to hear who you are, what you're working on, and what brought you here.",
+                "- **Join the community!** Say hello in the [#google-dp channel](https://app.slack.com/client/T01DHFZ2E4D/C0CJK1PGGNA) on the [OpenDP Slack](https://join.slack.com/t/opendp/shared_invite/zt-1aca9bm7k-hG7olKz6CiGm8htI2lxE8w), we'd love to hear who you are, what you're working on, and what brought you here.",
                 "- **A maintainer will review your PR shortly.** If you have questions in the meantime, don't hesitate to ask here or on Slack.",
                 '',
                 'Thanks for contributing to privacy-preserving machine learning! 🔐',
