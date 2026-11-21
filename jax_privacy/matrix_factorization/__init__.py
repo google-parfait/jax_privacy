@@ -14,6 +14,9 @@
 
 """Public API for matrix factorization.
 
+See the :doc:`/matrix_factorization` page for notation, participation schemas,
+and parameterized matrix classes used by this API.
+
 For a good introductory overview of the matrix factorization API and usages,
 see `dpmf_strategy_optimization.py
 <https://github.com/google-parfait/jax_privacy/blob/main/examples/dpmf_strategy_optimization.py>`_.
