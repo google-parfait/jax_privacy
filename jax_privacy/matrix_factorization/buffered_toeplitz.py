@@ -1171,9 +1171,9 @@ def geometric_sum(
 
   Args:
     a: Scale factor (or vector of scale factors).
-    r: ratio between successive terms. Any value is supported for finite
-      ``num``; the limit ``num=jnp.inf`` requires :math:`|r| < 1` for the series
-      to converge.
+    r: Ratio between successive terms. Any value is supported for finite
+      ``num``; for ``num=jnp.inf``, ``a / (1 - r)`` is evaluated directly
+      (assuming :math:`|r| < 1`, where the series converges).
     num: How many terms to add, or jnp.inf for the limit.
 
   Returns:
