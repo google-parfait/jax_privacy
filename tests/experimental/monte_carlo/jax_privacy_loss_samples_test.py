@@ -17,12 +17,14 @@
 from absl.testing import absltest
 from absl.testing import parameterized
 import jax
+import jax.numpy as jnp
 from jax_privacy import batch_selection
 from jax_privacy.experimental.monte_carlo import jax_privacy_loss_samples
 import numpy as np
 import scipy.stats
 
 jax.config.update('jax_enable_x64', True)
+jax.config.update('jax_num_cpu_devices', 2)
 
 _C_COL = np.array([0.5, 0.25], dtype=np.float64)
 _SIGMA = 1.0
@@ -113,16 +115,61 @@ class JaxPrivacyLossSamplesTest(parameterized.TestCase):
       np.testing.assert_array_equal(neg.privacy_loss, ref_neg.privacy_loss)
       np.testing.assert_array_equal(neg.counts, ref_neg.counts)
 
-    # Non-dividing num_samples rounds up to a whole multiple of microbatch_size.
+    # Non-dividing num_samples rounds up to a whole multiple of microbatch_size,
+    # and microbatch_size rounds up to a multiple of jax.device_count() (2).
+    for call_kwargs, expected in (
+        (dict(num_samples=100, microbatch_size=64), 128),
+        (dict(num_samples=5, microbatch_size=3), 8),
+        (dict(num_samples=1), 2),
+    ):
+      pos, neg = jax_privacy_loss_samples.privacy_loss_samples(
+          strategy,
+          _SIGMA,
+          _C_COL,
+          jax.random.PRNGKey(7),
+          **(kwargs | call_kwargs),
+      )
+      self.assertEqual(pos.num_samples, expected)
+      self.assertEqual(neg.num_samples, expected)
+
+  @parameterized.parameters(*_STRATEGIES)
+  def test_sharded_matches_single_device(self, strategy):
+    self.assertEqual(jax.device_count(), 2)
+    kwargs = dict(num_samples=64, grid_lo=-30.0, grid_hi=30.0, grid_size=601)
+    key = jax.random.key(11)
     pos, neg = jax_privacy_loss_samples.privacy_loss_samples(
-        strategy,
-        _SIGMA,
-        _C_COL,
-        jax.random.PRNGKey(7),
-        **(kwargs | dict(num_samples=100, microbatch_size=64)),
+        strategy, _SIGMA, jnp.asarray(_C_COL), key, microbatch_size=16, **kwargs
     )
-    self.assertEqual(pos.num_samples, 128)
-    self.assertEqual(neg.num_samples, 128)
+    single_device = jax.devices()[:1]
+    with (
+        absltest.mock.patch.object(jax, 'devices', return_value=single_device),
+        absltest.mock.patch.object(jax, 'device_count', return_value=1),
+    ):
+      ref_pos, ref_neg = jax_privacy_loss_samples.privacy_loss_samples(
+          strategy, _SIGMA, _C_COL, key, microbatch_size=64, **kwargs
+      )
+    np.testing.assert_array_equal(pos.privacy_loss, ref_pos.privacy_loss)
+    np.testing.assert_array_equal(pos.counts, ref_pos.counts)
+    np.testing.assert_array_equal(neg.privacy_loss, ref_neg.privacy_loss)
+    np.testing.assert_array_equal(neg.counts, ref_neg.counts)
+
+  def test_sharded_hlo_uses_all_reduce_without_all_gather(self):
+    grid = np.r_[np.linspace(-30.0, 30.0, 601), np.inf]
+    hlo = (
+        jax_privacy_loss_samples._sample_losses_and_bin.lower(
+            _STRATEGIES[0],
+            _SIGMA,
+            _C_COL,
+            grid,
+            jax.random.key(0),
+            num_samples=64,
+            microbatch_size=16,
+        )
+        .compile()
+        .as_text()
+    )
+    self.assertIn('all-reduce(', hlo)
+    self.assertNotIn('all-gather(', hlo)
 
   @parameterized.parameters(
       dict(num_samples=0),
