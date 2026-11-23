@@ -12,7 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Centralized validation utilities for jax_privacy."""
+"""Centralized input validation utilities for jax_privacy.
+
+Generic validators accept named values via **kwargs so error messages include
+both the parameter name and offending value:
+
+  >>> from jax_privacy import _validate
+  >>> _validate.positive(iterations=10, clip_norm=1.0)
+  >>> _validate.in_range(0, 1, closed='right', delta=1e-5)
+  >>> _validate.not_none('Required for truncation.', num_examples=None)
+  Traceback (most recent call last):
+    ...
+  ValueError: Expected num_examples to not be None. Required for truncation.
+"""
 
 import zlib
 
@@ -128,16 +140,26 @@ def same_tree_structure(reference, **kwargs):
 
 def is_int(context: str = '', **kwargs):
   """Validates that all values are integers."""
+  suffix = f' {context}' if context else ''
   for name, value in kwargs.items():
     if value != int(value):
-      raise ValueError(f'Expected {name}={value} to be an integer. {context}')
+      raise ValueError(f'Expected {name}={value} to be an integer.{suffix}')
 
 
 def is_none(context: str = '', **kwargs):
   """Validates that all values are None."""
+  suffix = f' {context}' if context else ''
   for name, value in kwargs.items():
     if value is not None:
-      raise ValueError(f'Expected {name}={value} to be None. {context}')
+      raise ValueError(f'Expected {name}={value} to be None.{suffix}')
+
+
+def not_none(context: str = '', **kwargs):
+  """Validates that all values are not None."""
+  suffix = f' {context}' if context else ''
+  for name, value in kwargs.items():
+    if value is None:
+      raise ValueError(f'Expected {name} to not be None.{suffix}')
 
 
 def batched(pytree, padding_example=None) -> int:
