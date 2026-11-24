@@ -145,9 +145,54 @@ class PrivacyLossSamplesTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'different support_bound'):
       delta_calculation.merge_privacy_loss_samples(s1, s2)
 
-  def test_merge_privacy_loss_samples_rejects_empty_args(self):
-    with self.assertRaisesRegex(ValueError, 'At least one'):
-      delta_calculation.merge_privacy_loss_samples()
+  def test_merge_privacy_loss_samples_zero_arguments(self):
+    empty = delta_calculation.merge_privacy_loss_samples()
+    np.testing.assert_array_equal(empty.privacy_loss, [])
+    np.testing.assert_array_equal(empty.counts, [])
+    self.assertIsNone(empty.log_weights)
+    self.assertEqual(empty.num_samples, 0)
+
+  def test_merge_privacy_loss_samples_two_empty_sets(self):
+    e1 = _PrivacyLossSamples([], support_bound=0.25)
+    e2 = _PrivacyLossSamples([], log_weights=[], support_bound=0.5)
+    merged = delta_calculation.merge_privacy_loss_samples(e1, e2)
+    np.testing.assert_array_equal(merged.privacy_loss, [])
+    np.testing.assert_array_equal(merged.counts, [])
+    self.assertIsNone(merged.log_weights)
+    self.assertEqual(merged.num_samples, 0)
+
+  def test_merge_privacy_loss_samples_empty_is_identity_with_wildcard_bound(
+      self,
+  ):
+    empty = delta_calculation.merge_privacy_loss_samples()
+
+    weighted = _PrivacyLossSamples(
+        [1.0, 2.0],
+        counts=[2, 3],
+        log_weights=[-0.5, -1.0],
+        support_bound=0.25,
+    )
+    for to_merge in (
+        [empty, weighted],
+        [weighted, empty],
+        [empty, weighted, empty],
+    ):
+      merged = delta_calculation.merge_privacy_loss_samples(*to_merge)
+      np.testing.assert_array_equal(merged.privacy_loss, weighted.privacy_loss)
+      np.testing.assert_array_equal(merged.counts, weighted.counts)
+      np.testing.assert_allclose(merged.log_weights, weighted.log_weights)
+      self.assertEqual(merged.support_bound, weighted.support_bound)
+
+    unweighted = _PrivacyLossSamples([1.5], counts=[4], support_bound=0.4)
+    merged_unweighted = delta_calculation.merge_privacy_loss_samples(
+        empty, unweighted
+    )
+    np.testing.assert_array_equal(
+        merged_unweighted.privacy_loss, unweighted.privacy_loss
+    )
+    np.testing.assert_array_equal(merged_unweighted.counts, unweighted.counts)
+    self.assertIsNone(merged_unweighted.log_weights)
+    self.assertEqual(merged_unweighted.support_bound, unweighted.support_bound)
 
   def test_merge_privacy_loss_samples_thousands_of_instances_is_stable(self):
     rng = np.random.default_rng(0x5EED)

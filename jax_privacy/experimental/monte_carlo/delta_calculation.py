@@ -87,38 +87,50 @@ class PrivacyLossSamples:
 def merge_privacy_loss_samples(
     *samples: PrivacyLossSamples,
 ) -> PrivacyLossSamples:
-  """Merges one or more :class:`PrivacyLossSamples` into deduplicated samples.
+  """Merges zero or more :class:`PrivacyLossSamples` into deduplicated samples.
 
   Duplicate ``privacy_loss`` values across (and within) the inputs are combined
-  by summing their ``counts`` and, if any input specifies ``log_weights``,
-  computing the log of the count-weighted average of the importance weights in
-  each bucket. When combined with rounding up ``privacy_loss`` values, this can
-  significantly reduce the memory footprint of storing samples.
+  by summing their ``counts`` and, if any non-empty input specifies
+  ``log_weights``, computing the log of the count-weighted average of the
+  importance weights in each bucket. When combined with rounding up
+  ``privacy_loss`` values, this can significantly reduce the memory footprint of
+  storing samples.
+
+  Empty inputs (``num_samples == 0``) act as identity elements with wildcard
+  ``support_bound``: merging an empty input with non-empty inputs adopts the
+  ``support_bound`` of the non-empty inputs, and calling
+  ``merge_privacy_loss_samples()`` with no arguments returns an empty
+  :class:`PrivacyLossSamples` accumulator.
 
   Args:
-    *samples: One or more :class:`PrivacyLossSamples` instances with the same
-      ``support_bound``. These samples are assumed to come from the same
-      distribution (that is, the same mechanism, same hockey-stick divergence
-      direction, and same proposal distribution if importance sampling is used).
+    *samples: Zero or more :class:`PrivacyLossSamples` instances whose non-empty
+      inputs share the same ``support_bound``. These samples are assumed to come
+      from the same distribution (that is, the same mechanism, same hockey-stick
+      divergence direction, and same proposal distribution if importance
+      sampling is used).
 
   Returns:
     A :class:`PrivacyLossSamples` with unique sorted ``privacy_loss`` values,
-    summed ``counts``, and (if any input had ``log_weights``) count-weighted
-    average ``log_weights``.
+    summed ``counts``, and (if any non-empty input had ``log_weights``)
+    count-weighted average ``log_weights``.
 
   Raises:
-    ValueError: If no samples are provided or if ``support_bound`` values
-      differ.
+    ValueError: If non-empty inputs have different ``support_bound`` values.
   """
-  if not samples:
-    raise ValueError('At least one PrivacyLossSamples instance is required.')
-  support_bound = samples[0].support_bound
-  if any(s.support_bound != support_bound for s in samples[1:]):
+  losses = [np.asarray(s.privacy_loss, dtype=float) for s in samples]
+  non_empty = [s for s, loss in zip(samples, losses) if len(loss) > 0]
+  if not non_empty:
+    return PrivacyLossSamples(
+        privacy_loss=np.array([], dtype=float),
+        counts=np.array([], dtype=int),
+        support_bound=1.0,
+    )
+
+  if len({s.support_bound for s in non_empty}) > 1:
     raise ValueError(
         'Cannot merge PrivacyLossSamples with different support_bound values.'
     )
 
-  losses = [np.asarray(s.privacy_loss, dtype=float) for s in samples]
   privacy_loss = np.concatenate(losses)
   counts = np.concatenate([
       np.ones(len(loss), dtype=int)
@@ -130,7 +142,7 @@ def merge_privacy_loss_samples(
   merged_counts = np.zeros(len(unique_loss), dtype=counts.dtype)
   np.add.at(merged_counts, inverse_indices, counts)
 
-  if all(s.log_weights is None for s in samples):
+  if all(s.log_weights is None for s in non_empty):
     merged_log_weights = None
   else:
     log_weights = np.concatenate([
@@ -149,7 +161,7 @@ def merge_privacy_loss_samples(
       privacy_loss=unique_loss,
       counts=merged_counts,
       log_weights=merged_log_weights,
-      support_bound=support_bound,
+      support_bound=non_empty[0].support_bound,
   )
 
 
