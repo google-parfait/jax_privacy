@@ -123,6 +123,31 @@ class ValidateTest(parameterized.TestCase):
     with self.assertRaisesRegex(ValueError, 'AxisType.Auto'):
       _validate.explicit_mesh(status=False, device_mesh=explicit)
 
+  def test_none_and_int_validators(self):
+    _validate.is_none(x=None, y=None)
+    _validate.not_none(x=0, y=False)
+    _validate.is_int(x=3, y=3.0)
+    with self.assertRaisesRegex(ValueError, r'^Expected x=5 to be None\.$'):
+      _validate.is_none(x=5)
+    with self.assertRaisesRegex(
+        ValueError, r'^Expected x=5 to be None\. Extra context\.$'
+    ):
+      _validate.is_none('Extra context.', x=5)
+    with self.assertRaisesRegex(ValueError, r'^Expected x to not be None\.$'):
+      _validate.not_none(x=None)
+    with self.assertRaisesRegex(
+        ValueError, r'^Expected x to not be None\. Extra context\.$'
+    ):
+      _validate.not_none('Extra context.', x=None)
+    with self.assertRaisesRegex(
+        ValueError, r'^Expected x=2\.5 to be an integer\.$'
+    ):
+      _validate.is_int(x=2.5)
+    with self.assertRaisesRegex(
+        ValueError, r'^Expected x=2\.5 to be an integer\. Extra context\.$'
+    ):
+      _validate.is_int(context='Extra context.', x=2.5)
+
 
 if __name__ == '__main__':
   absltest.main()
