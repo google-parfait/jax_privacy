@@ -854,6 +854,38 @@ class ClosedFormsTest(parameterized.TestCase):
     )
 
   @hypothesis.given(
+      a=st.floats(0.1, 10.0),
+      r=st.one_of(
+          st.floats(-5.0, -1.0, exclude_max=True),
+          st.floats(1.0, 5.0, exclude_min=True),
+      ),
+      n=st.integers(1, 40),
+  )
+  # theta_j * theta_k for a buf_decay of -1.5, which arises in max_error:
+  @hypothesis.example(a=1.0, r=2.25, n=20)
+  @hypothesis.example(a=1.0, r=-1.5, n=20)
+  @hypothesis.example(a=1.0, r=1 + 1e-4, n=5)  # Uses direct computation
+  @hypothesis.example(a=1.0, r=1 + 1e-5, n=5)  # Uses series approx
+  @hypothesis.example(a=1.0, r=1 + 1e-4, n=20)  # Uses direct computation
+  @hypothesis.example(a=1.0, r=1 + 1e-6, n=20)  # Uses series approx
+  def test_geometric_sum_ratio_magnitude_above_one(self, a, r, n):
+    # The Taylor expansion used by geometric_sum is only valid in a
+    # neighborhood of r = 1, so r outside 1 +/- 10**(-pow_threshold) must fall
+    # back on the (exact) direct calculation. A one-sided threshold previously
+    # sent every r > 1 to the series approximation, silently returning a wildly
+    # incorrect value.
+    brute_force_grad = jax.value_and_grad(
+        lambda a, r, n: a * jnp.sum(r ** jnp.arange(0, n)), argnums=(0, 1)
+    )
+    grad_fn = jax.value_and_grad(
+        buffered_toeplitz.geometric_sum, argnums=(0, 1)
+    )
+    v1, g1 = brute_force_grad(a, r, n)
+    v2, g2 = grad_fn(a, r, n)
+    assert_allclose(v1, v2, rtol=1e-9, err_msg='Values are not equal.')
+    assert_allclose(g1, g2, rtol=1e-7, err_msg='Gradients are not equal.')
+
+  @hypothesis.given(
       a=st.floats(0.0, 1e6), r=st.floats(0.0, 1.0), n=st.integers(1, 100)
   )
   @hypothesis.example(a=1.0, r=1.0, n=1)
@@ -1017,6 +1049,59 @@ class ClosedFormsTest(parameterized.TestCase):
     limit_loss = n * buffered_toeplitz.limit_max_loss(blt)
     if jnp.isfinite(limit_loss):
       self.assertLessEqual(limit_loss, loss + 1e-10)
+
+  @parameterized.parameters(8, 32, 128)
+  def test_max_loss_when_noising_blt_oscillates(self, n):
+    # A strategy BLT with buf_decay in (0, 1) and output_scale > 0 passes every
+    # guard on max_loss, yet its inverse (the noising matrix C^{-1}) can have a
+    # buf_decay below -1 (here -1.5), so theta_j * theta_k > 1. Such BLTs lie
+    # outside the class optimize() produces, but max_loss is public and must
+    # not silently return a wrong value for them: it previously returned a
+    # negative "squared error" for this BLT.
+    blt = make_blt([0.5], [2.0])
+    self.assertLess(blt.inverse().buf_decay[0], -1.0)
+
+    brute_force_loss = lambda blt, n: toeplitz.loss(
+        strategy_coef=blt.toeplitz_coefs(n), reduction_fn=jnp.max
+    )
+    loss = buffered_toeplitz.max_loss(blt, n)
+    self.assertGreater(loss, 0.0)
+    assert_allclose(
+        loss,
+        brute_force_loss(blt, n),
+        rtol=1e-9,
+        err_msg='max_loss does not match direct calculation',
+    )
+
+    # Optimization differentiates through max_loss, so check gradients too.
+    grad1 = jax.grad(buffered_toeplitz.max_loss)(blt, n)
+    grad2 = jax.grad(brute_force_loss)(blt, n)
+    assert_allclose(
+        grad1.buf_decay,
+        grad2.buf_decay,
+        rtol=1e-6,
+        err_msg='buf_decay gradient does not match direct calculation',
+    )
+    assert_allclose(
+        grad1.output_scale,
+        grad2.output_scale,
+        rtol=1e-6,
+        err_msg='output_scale gradient does not match direct calculation',
+    )
+
+  @parameterized.parameters(8, 32, 128)
+  def test_sensitivity_squared_buf_decay_below_minus_one(self, n):
+    # r > 1 also reaches geometric_sum from sensitivity_squared, as the product
+    # theta_j * theta_k of the strategy BLT's own buf_decay parameters.
+    blt = make_blt([-1.5, -0.8], [0.2, -0.1])
+    sens_squared = buffered_toeplitz.sensitivity_squared(blt, n)
+    expected = toeplitz.sensitivity_squared(blt.toeplitz_coefs(n), n)
+    assert_allclose(
+        sens_squared,
+        expected,
+        rtol=1e-9,
+        err_msg='sensitivity_squared does not match direct calculation',
+    )
 
   @hypothesis.given(blt_tuple=st.sampled_from(BLT_TUPLES), n=st.integers(1, 50))
   def test_max_iter_loss_gradients(self, blt_tuple, n):
