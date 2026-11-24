@@ -171,7 +171,7 @@ For supported combinations, the accounting approach is noted as **PLD**,
     {func}`~jax_privacy.accounting.random_allocation_bandmf_event` for
     `cycle_length > 1` with a banded strategy matrix. Both are configured
     end-to-end via {class}`~jax_privacy.execution_plan.BandMFConfig` with
-    `sub_strategy=CyclicInnerSamplingStrategy.RANDOM_ALLOCATION`.
+    `sampling_strategy=SamplingStrategy.CYCLIC_RANDOM_ALLOCATION`.
 
 5.  **Shuffling** is the most common batch selection strategy in practice but
     has a *strictly worse* privacy guarantee than Poisson subsampling
@@ -654,7 +654,7 @@ to accountant support and available privacy metrics.
     {func}`~jax_privacy.accounting.random_allocation_dpsgd_event` and
     {func}`~jax_privacy.accounting.random_allocation_bandmf_event`, and
     execution plans via {class}`~jax_privacy.execution_plan.BandMFConfig` with
-    `sub_strategy=CyclicInnerSamplingStrategy.RANDOM_ALLOCATION`.
+    `sampling_strategy=SamplingStrategy.CYCLIC_RANDOM_ALLOCATION`.
 
 (dong-2026b)=
 ### Dong+ 2026b: Less Random, More Private: What is the Optimal Subsampling Scheme for DP-SGD?

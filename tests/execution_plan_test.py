@@ -24,6 +24,7 @@ import numpy as np
 import optax
 
 BandMFConfig = execution_plan.BandMFConfig
+SamplingStrategy = execution_plan.SamplingStrategy
 
 
 # pylint: disable=g-bad-todo
@@ -254,27 +255,28 @@ class ExecutionPlanTest(parameterized.TestCase):
     updates, _ = plan.noise_addition_transform.update(dummy_grads, opt_state)
     np.testing.assert_equal(updates, dummy_grads)
 
-  @parameterized.parameters(
-      # expected_participations must be an integer.
-      {"expected_participations": 2.5},
-      # k > iterations // num_bands.
-      {"expected_participations": 11},
-      # truncation is Poisson-only.
-      {"truncated_batch_size": 5, "num_examples": 100},
-      # num_examples (zero-out adjacency) is Poisson-only.
-      {"num_examples": 100},
+  @parameterized.product(
+      sampling_strategy=[
+          SamplingStrategy.CYCLIC_RANDOM_ALLOCATION,
+          SamplingStrategy.MIN_SEP_POISSON,
+          SamplingStrategy.MIN_SEP_RANDOM_ALLOCATION,
+      ],
+      kwargs=[
+          {"expected_participations": 11},
+          {"truncated_batch_size": 5, "num_examples": 100},
+          {"num_examples": 100},
+      ],
   )
-  def test_random_allocation_validation(self, **kwargs):
-    default_kwargs = {
+  def test_non_cyclic_poisson_validation(self, sampling_strategy, kwargs):
+    defaults = {
         "strategy": np.linspace(1, 0, 2),
         "iterations": 20,
         "expected_participations": 2,
         "noise_multiplier": 1.0,
-        "sub_strategy": execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
+        "sampling_strategy": sampling_strategy,
     }
-    default_kwargs.update(kwargs)
     with self.assertRaises(ValueError):
-      BandMFConfig(**default_kwargs)
+      BandMFConfig(**(defaults | kwargs))
 
   @parameterized.parameters(
       {"num_bands": 1, "iterations": 20, "expected_participations": 4},
@@ -290,7 +292,7 @@ class ExecutionPlanTest(parameterized.TestCase):
         iterations=iterations,
         expected_participations=expected_participations,
         noise_multiplier=1.5,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
+        sampling_strategy=SamplingStrategy.CYCLIC_RANDOM_ALLOCATION,
     )
     plan = config.make()
 
@@ -317,7 +319,7 @@ class ExecutionPlanTest(parameterized.TestCase):
         num_bands=1,
         iterations=10,
         expected_participations=2,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
+        sampling_strategy=SamplingStrategy.CYCLIC_RANDOM_ALLOCATION,
     )
     with self.assertRaises(ValueError):
       config.make()
@@ -330,7 +332,7 @@ class ExecutionPlanTest(parameterized.TestCase):
         num_bands=1,
         iterations=5,
         expected_participations=1,
-        sub_strategy=execution_plan.CyclicInnerStrategy.RANDOM_ALLOCATION,
+        sampling_strategy=SamplingStrategy.CYCLIC_RANDOM_ALLOCATION,
     ).calibrate(
         epsilon=1.0,
         delta=1e-03,
@@ -346,16 +348,45 @@ class ExecutionPlanTest(parameterized.TestCase):
         plan.dp_event, dp_accounting.dp_event.RandomAllocationDpEvent
     )
 
-  def test_poisson_is_the_default_sub_strategy(self):
+  @parameterized.parameters(
+      (SamplingStrategy.CYCLIC_POISSON, 2.0),
+      (SamplingStrategy.MIN_SEP_POISSON, 0.0),
+      (SamplingStrategy.MIN_SEP_POISSON, 2.0),
+      (SamplingStrategy.MIN_SEP_POISSON, 5.0),
+      (SamplingStrategy.MIN_SEP_RANDOM_ALLOCATION, 0.0),
+      (SamplingStrategy.MIN_SEP_RANDOM_ALLOCATION, 2.5),
+      (SamplingStrategy.CYCLIC_RANDOM_ALLOCATION, 0.5),
+      (SamplingStrategy.CYCLIC_RANDOM_ALLOCATION, 2.5),
+  )
+  def test_sampling_strategies(self, strategy, expected_participations):
+    config = BandMFConfig.default(
+        num_bands=2,
+        iterations=10,
+        expected_participations=expected_participations,
+        sampling_strategy=strategy,
+    )
+    self.assertIsInstance(
+        config.batch_selection_strategy, batch_selection.BatchSelectionStrategy
+    )
+    batches = list(config.batch_selection_strategy.batch_iterator(20, rng=0))
+    self.assertLen(batches, 10)
+    plan = dataclasses.replace(config, noise_multiplier=1.0).make()
+    self.assertEqual(
+        plan.batch_selection_strategy, config.batch_selection_strategy
+    )
+    if strategy != SamplingStrategy.CYCLIC_POISSON:
+      self.assertIsInstance(plan.dp_event, dp_accounting.UnsupportedDpEvent)
+      with self.assertRaises(dp_accounting.UnsupportedEventError):
+        config.calibrate(epsilon=1.0, delta=1e-5)
+
+  def test_poisson_is_the_default_sampling_strategy(self):
     config = BandMFConfig.default(
         num_bands=2,
         iterations=20,
         expected_participations=2,
         noise_multiplier=1.0,
     )
-    self.assertEqual(
-        config.sub_strategy, execution_plan.CyclicInnerStrategy.POISSON
-    )
+    self.assertEqual(config.sampling_strategy, SamplingStrategy.CYCLIC_POISSON)
     self.assertIsInstance(
         config.make().batch_selection_strategy,
         batch_selection.CyclicPoissonSampling,
